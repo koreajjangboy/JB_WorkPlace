@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { taskApi, type Run, type RunEvent } from "../api";
+import { taskApi, type Limits, type Run, type RunEvent } from "../api";
+import { LimitPicker, describeLimits } from "../limits";
 import { Badge, Button, Card, ErrorBox, Loading, StatusBadge } from "../components";
 import { dateTime, duration, tokens, usd } from "../format";
 import { useAsync } from "../useAsync";
@@ -194,6 +195,8 @@ export default function TaskDetailPage() {
   const [followUp, setFollowUp] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [limitsDraft, setLimitsDraft] = useState<Limits | null>(null);
+  const runner = useAsync(() => taskApi.runner(), []);
 
   if (loading && !task) return <Loading />;
   if (error) return <ErrorBox message={error} />;
@@ -201,6 +204,9 @@ export default function TaskDetailPage() {
 
   const running = task.status === "running";
   const neverRun = task.runs.length === 0;
+  const lastRun = task.runs[task.runs.length - 1];
+  const canContinue =
+    !running && !!task.session_id && !!lastRun && ["budget", "timeout", "restart"].includes(lastRun.stop_reason ?? "");
 
   async function run(prompt?: string) {
     setBusy(true);
@@ -213,6 +219,30 @@ export default function TaskDetailPage() {
       setActionError((e as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function continueRun() {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await taskApi.continue(task!.id);
+      reload();
+    } catch (e) {
+      setActionError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveLimits() {
+    if (!limitsDraft) return;
+    try {
+      await taskApi.setLimits(task!.id, limitsDraft);
+      setLimitsDraft(null);
+      reload();
+    } catch (e) {
+      setActionError((e as Error).message);
     }
   }
 
@@ -248,6 +278,30 @@ export default function TaskDetailPage() {
           · {task.project_path} · 실행 {task.run_count}회
           {task.total_cost_usd != null && <> · 합계 {usd(task.total_cost_usd)}</>}
         </div>
+        {runner.data && (
+          <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+            실행 한도: {describeLimits(task, runner.data)}{" "}
+            {!limitsDraft && (
+              <button
+                className="text-blue-600 hover:underline dark:text-blue-400"
+                onClick={() => setLimitsDraft({ max_budget_usd: task.max_budget_usd, max_minutes: task.max_minutes })}
+              >
+                변경
+              </button>
+            )}
+          </div>
+        )}
+        {limitsDraft && runner.data && (
+          <div className="mt-2 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+            <LimitPicker value={limitsDraft} onChange={setLimitsDraft} runner={runner.data} />
+            <div className="mt-2 flex justify-end gap-2">
+              <Button onClick={() => setLimitsDraft(null)}>취소</Button>
+              <Button variant="primary" onClick={saveLimits}>
+                저장 (다음 실행부터)
+              </Button>
+            </div>
+          </div>
+        )}
         {task.project_dirty_files > 0 && !running && (
           <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
             이 프로젝트에는 저장 안 된 변경 {task.project_dirty_files}개가 있습니다. Claude가 바꾼 내용과 섞일 수 있어요.
@@ -269,6 +323,26 @@ export default function TaskDetailPage() {
       {task.runs.map((r, i) => (
         <RunView key={r.id} run={r} index={i} onChange={reload} />
       ))}
+
+      {canContinue && lastRun && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-900 dark:bg-amber-950/30">
+          <div className="text-sm font-medium text-amber-900 dark:text-amber-200">
+            {lastRun.stop_reason === "budget"
+              ? `비용 한도($${lastRun.max_budget_usd})에 도달해 멈췄습니다`
+              : lastRun.stop_reason === "timeout"
+                ? `시간 한도(${lastRun.max_minutes}분)를 넘어 멈췄습니다`
+                : "서버가 다시 시작되어 멈췄습니다"}
+          </div>
+          <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">
+            지금까지 바뀐 파일은 그대로 있고, 같은 Claude 세션을 이어서 실행합니다. 한도가 부족했다면 위의 "실행 한도"를 먼저 바꾸세요.
+          </p>
+          <div className="mt-2 flex justify-end">
+            <Button variant="primary" onClick={continueRun} disabled={busy}>
+              {busy ? "시작하는 중…" : "이어서 계속"}
+            </Button>
+          </div>
+        </div>
+      )}
 
       {!neverRun && !running && <ReviewCard task={task} onChanged={reload} />}
 

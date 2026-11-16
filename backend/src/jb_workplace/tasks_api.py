@@ -11,11 +11,20 @@ from sqlmodel import Session, select
 
 from .config import get_settings
 from .db import engine, get_session
-from .models import Project, Run, RunEvent, Task
+from .models import Project, RateLimitSnapshot, Run, RunEvent, Task
 from .gitops import GitError, as_dict, commit, file_diff, task_changes
 from .gitops import push as git_push
 from .sync import refresh_project
-from .runner import RunnerError, make_title, running_count, start_run, stop_run
+from .runner import (
+    CONTINUE_PROMPT,
+    MAX_BUDGET_CAP_USD,
+    MAX_MINUTES_CAP,
+    RunnerError,
+    make_title,
+    running_count,
+    start_run,
+    stop_run,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -41,6 +50,9 @@ class RunOut(BaseModel):
     cache_creation_tokens: int
     cache_read_tokens: int
     cost_usd: float | None
+    stop_reason: str | None
+    max_budget_usd: float | None
+    max_minutes: int | None
 
 
 class TaskOut(BaseModel):
@@ -59,6 +71,8 @@ class TaskOut(BaseModel):
     commit_message: str | None
     commit_sha: str | None
     committed_at: datetime | None
+    max_budget_usd: float | None  # 비어 있으면 기본값
+    max_minutes: int | None
 
 
 class TaskDetail(TaskOut):
@@ -67,7 +81,14 @@ class TaskDetail(TaskOut):
     runs: list[RunOut]
 
 
-class TaskCreate(BaseModel):
+class LimitsIn(BaseModel):
+    """작업별 실행 한도. 둘 다 비우면 기본값을 쓴다."""
+
+    max_budget_usd: float | None = Field(default=None, gt=0, le=MAX_BUDGET_CAP_USD)
+    max_minutes: int | None = Field(default=None, gt=0, le=MAX_MINUTES_CAP)
+
+
+class TaskCreate(LimitsIn):
     project_id: int
     prompt: str = Field(min_length=1, max_length=20000)
     title: str | None = Field(default=None, max_length=200)
@@ -197,6 +218,8 @@ def create_task(body: TaskCreate, db: Session = Depends(get_session)) -> TaskOut
         project_id=project.id,
         title=(body.title or "").strip() or make_title(prompt),
         prompt=prompt,
+        max_budget_usd=body.max_budget_usd,
+        max_minutes=body.max_minutes,
         status="todo",
         created_at=now,
         updated_at=now,
@@ -246,6 +269,49 @@ def delete_task(task_id: int, db: Session = Depends(get_session)) -> None:
 @router.post("/tasks/{task_id}/runs", response_model=RunOut, status_code=201)
 def create_run(task_id: int, body: RunCreate) -> RunOut:
     return _start(task_id, body.prompt)
+
+
+@router.put("/tasks/{task_id}/limits", response_model=TaskOut)
+def set_limits(task_id: int, body: LimitsIn, db: Session = Depends(get_session)) -> TaskOut:
+    """작업의 실행 한도를 바꾼다. 다음 실행부터 적용된다."""
+    task = _get_task(db, task_id)
+    task.max_budget_usd = body.max_budget_usd
+    task.max_minutes = body.max_minutes
+    task.updated_at = datetime.now(UTC)
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return _task_outs(db, [task])[0]
+
+
+@router.post("/tasks/{task_id}/continue", response_model=RunOut, status_code=201)
+def continue_task(task_id: int, db: Session = Depends(get_session)) -> RunOut:
+    """한도에 걸려 멈춘 실행을 같은 세션에서 이어 간다."""
+    task = _get_task(db, task_id)
+    last = db.exec(select(Run).where(Run.task_id == task.id).order_by(Run.id.desc()).limit(1)).first()
+    if last is None or last.stop_reason not in ("budget", "timeout", "restart"):
+        raise HTTPException(409, "한도나 재시작으로 멈춘 실행만 이어서 계속할 수 있습니다")
+    if not task.session_id:
+        raise HTTPException(409, "이어 갈 Claude 세션이 없습니다")
+    db.close()
+    return _start(task_id, CONTINUE_PROMPT)
+
+
+class RateLimitOut(BaseModel):
+    ts: datetime
+    status: str | None
+    five_hour_utilization: float | None
+    five_hour_resets_at: datetime | None
+    seven_day_utilization: float | None
+    seven_day_resets_at: datetime | None
+    overage_status: str | None
+
+
+@router.get("/usage/limits", response_model=RateLimitOut | None)
+def latest_rate_limit(db: Session = Depends(get_session)) -> RateLimitOut | None:
+    """Claude Code가 마지막으로 알려준 구독 사용 한도 사용률."""
+    row = db.exec(select(RateLimitSnapshot).order_by(RateLimitSnapshot.ts.desc()).limit(1)).first()
+    return RateLimitOut(**row.model_dump(include=set(RateLimitOut.model_fields))) if row else None
 
 
 @router.post("/runs/{run_id}/stop")

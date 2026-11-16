@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import { api, taskApi } from "../api";
 import { Card, Empty, ErrorBox, Loading, SessionRow, Stat } from "../components";
 import { relativeTime, tokens } from "../format";
+import { RateLimitView } from "../limits";
 import { useAsync } from "../useAsync";
 import { TaskRow } from "./TasksPage";
 
@@ -14,6 +15,7 @@ export default function HomePage() {
         api.projects(),
         api.sessions({ limit: 500 }),
         taskApi.list({ status: "running,review,failed" }),
+        taskApi.rateLimit(),
       ]),
     [],
   );
@@ -21,7 +23,7 @@ export default function HomePage() {
   if (error) return <ErrorBox message={error} />;
   if (!data) return null;
 
-  const [projects, sessions, activeTasks] = data;
+  const [projects, sessions, activeTasks, rateLimit] = data;
   const runningCount = activeTasks.filter((t) => t.status === "running").length;
   const reviewCount = activeTasks.filter((t) => t.status === "review").length;
   const weekAgo = Date.now() - WEEK;
@@ -39,20 +41,25 @@ export default function HomePage() {
         <Stat label="저장 안 된 변경" value={dirtyTotal} hint="모든 프로젝트 합계 (파일 수)" />
       </div>
 
-      <Card
-        title="주목할 작업"
-        action={
-          <Link to="/tasks/new" className="text-xs text-blue-600 hover:underline dark:text-blue-400">
-            + 새 작업
-          </Link>
-        }
-      >
-        {activeTasks.length === 0 ? (
-          <Empty>실행 중이거나 리뷰를 기다리는 작업이 없습니다.</Empty>
-        ) : (
-          activeTasks.slice(0, 6).map((t) => <TaskRow key={t.id} t={t} />)
-        )}
-      </Card>
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+        <Card
+          title="주목할 작업"
+          action={
+            <Link to="/tasks/new" className="text-xs text-blue-600 hover:underline dark:text-blue-400">
+              + 새 작업
+            </Link>
+          }
+        >
+          {activeTasks.length === 0 ? (
+            <Empty>실행 중이거나 리뷰를 기다리는 작업이 없습니다.</Empty>
+          ) : (
+            activeTasks.slice(0, 6).map((t) => <TaskRow key={t.id} t={t} />)
+          )}
+        </Card>
+        <Card title="Claude 사용 한도">
+          <RateLimitView data={rateLimit} />
+        </Card>
+      </div>
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <Card title="최근 세션" action={<span className="text-xs text-zinc-500">모든 프로젝트</span>}>

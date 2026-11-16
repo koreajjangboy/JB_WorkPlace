@@ -112,6 +112,21 @@ export type Run = {
   cache_creation_tokens: number;
   cache_read_tokens: number;
   cost_usd: number | null;
+  stop_reason: "budget" | "timeout" | "stopped" | "error" | "restart" | null;
+  max_budget_usd: number | null;
+  max_minutes: number | null;
+};
+
+export type Limits = { max_budget_usd: number | null; max_minutes: number | null };
+
+export type RateLimit = {
+  ts: string;
+  status: string | null;
+  five_hour_utilization: number | null;
+  five_hour_resets_at: string | null;
+  seven_day_utilization: number | null;
+  seven_day_resets_at: string | null;
+  overage_status: string | null;
 };
 
 export type Task = {
@@ -130,6 +145,8 @@ export type Task = {
   commit_message: string | null;
   commit_sha: string | null;
   committed_at: string | null;
+  max_budget_usd: number | null;
+  max_minutes: number | null;
 };
 
 export type TaskDetail = Task & {
@@ -173,8 +190,12 @@ export const taskApi = {
   },
   counts: () => request<Record<string, number>>("/api/tasks/counts"),
   get: (id: number) => request<TaskDetail>(`/api/tasks/${id}`),
-  create: (body: { project_id: number; prompt: string; title?: string; run_now: boolean }) =>
+  create: (body: { project_id: number; prompt: string; title?: string; run_now: boolean } & Partial<Limits>) =>
     request<Task>("/api/tasks", json(body)),
+  setLimits: (id: number, limits: Limits) =>
+    request<Task>(`/api/tasks/${id}/limits`, { ...json(limits), method: "PUT" }),
+  continue: (id: number) => request<Run>(`/api/tasks/${id}/continue`, { method: "POST" }),
+  rateLimit: () => request<RateLimit | null>("/api/usage/limits"),
   remove: async (id: number) => {
     const res = await fetch(`/api/tasks/${id}`, { method: "DELETE" });
     if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? res.statusText);

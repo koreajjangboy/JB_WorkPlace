@@ -25,7 +25,7 @@ from sqlmodel import Session, select
 from .config import get_settings
 from .db import engine
 from .gitops import GitError, snapshot
-from .models import Project, Run, RunEvent, Task
+from .models import Project, RateLimitSnapshot, Run, RunEvent, Task
 from .scanner.sessions import TOOL_INPUT_LIMIT, TOOL_RESULT_LIMIT, TEXT_LIMIT, _text_of, _truncate
 
 log = logging.getLogger(__name__)
@@ -73,7 +73,21 @@ def running_count(db: Session) -> int:
     return db.exec(select(func.count()).select_from(Run).where(Run.status == "running")).one()
 
 
-def _build_args(exe: str, task: Task, resume: str | None) -> list[str]:
+MAX_BUDGET_CAP_USD = 50.0  # 작업별 한도로 고를 수 있는 최댓값
+MAX_MINUTES_CAP = 480
+
+# 한도에 걸려 멈춘 뒤 [이어서 계속]을 누르면 보내는 지시
+CONTINUE_PROMPT = "이전 실행이 실행 한도(비용 또는 시간)에 걸려 중간에 멈췄습니다. 멈춘 지점부터 이어서 작업을 끝까지 계속해 주세요."
+
+
+def effective_limits(task: Task) -> tuple[float, int]:
+    s = get_settings()
+    budget = task.max_budget_usd if task.max_budget_usd else s.runner_max_budget_usd
+    minutes = task.max_minutes if task.max_minutes else s.runner_max_minutes
+    return min(budget, MAX_BUDGET_CAP_USD), min(minutes, MAX_MINUTES_CAP)
+
+
+def _build_args(exe: str, task: Task, resume: str | None, budget: float) -> list[str]:
     s = get_settings()
     args = [
         exe, "-p",
@@ -84,7 +98,7 @@ def _build_args(exe: str, task: Task, resume: str | None) -> list[str]:
         "--permission-prompts", "none",
         "--allowedTools", s.runner_allowed_tools,
         "--disallowedTools", s.runner_disallowed_tools,
-        "--max-budget-usd", f"{s.runner_max_budget_usd:g}",
+        "--max-budget-usd", f"{budget:g}",
         "--name", f"WorkPlace #{task.id}: {task.title}"[:120],
         "--append-system-prompt", COMMIT_HINT,
     ]
@@ -132,7 +146,16 @@ def start_run(task_id: int, prompt: str | None = None) -> Run:
                 except GitError as exc:
                     log.info("변경 추적 기준을 만들지 못함 (task %s): %s", task.id, exc)
 
-            run = Run(task_id=task.id, prompt=text, status="running", started_at=_now(), resumed_from=resume)
+            budget, minutes = effective_limits(task)
+            run = Run(
+                task_id=task.id,
+                prompt=text,
+                status="running",
+                started_at=_now(),
+                resumed_from=resume,
+                max_budget_usd=budget,
+                max_minutes=minutes,
+            )
             task.status = "running"
             task.updated_at = _now()
             db.add(run)
@@ -141,7 +164,7 @@ def start_run(task_id: int, prompt: str | None = None) -> Run:
             db.refresh(run)
             db.refresh(task)
             run_id, cwd = run.id, project.path
-            args = _build_args(exe, task, resume)
+            args = _build_args(exe, task, resume, budget)
 
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         try:
@@ -158,7 +181,7 @@ def start_run(task_id: int, prompt: str | None = None) -> Run:
                 creationflags=flags,
             )
         except OSError as exc:
-            _finish(run_id, status="failed", error=f"claude 실행 실패: {exc}")
+            _finish(run_id, status="failed", error=f"claude 실행 실패: {exc}", stop_reason="error")
             raise RunnerError(f"claude 실행 실패: {exc}", 500) from exc
 
         _procs[run_id] = proc
@@ -170,7 +193,9 @@ def start_run(task_id: int, prompt: str | None = None) -> Run:
             db.refresh(row)
             result = row
 
-    threading.Thread(target=_watch, args=(run_id, proc, text), daemon=True, name=f"run-{run_id}").start()
+    threading.Thread(
+        target=_watch, args=(run_id, proc, text, budget, minutes), daemon=True, name=f"run-{run_id}"
+    ).start()
     return result
 
 
@@ -310,11 +335,41 @@ def _handle_line(run_id: int, line: str, writer: _EventWriter, state: dict[str, 
             "duration_ms": msg.get("duration_ms"),
             "denials": denials,
         })
-    # rate_limit_event, task_summary 같은 나머지 메시지는 화면에 필요 없어 버린다.
+        return
+
+    if mtype == "rate_limit_event":
+        _save_rate_limit(run_id, msg.get("rate_limit_info") or {})
+    # task_summary 같은 나머지 메시지는 화면에 필요 없어 버린다.
 
 
-def _watch(run_id: int, proc: subprocess.Popen, prompt: str) -> None:
-    settings = get_settings()
+def _epoch(value: Any) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(float(value), tz=UTC) if value else None
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _save_rate_limit(run_id: int, info: dict[str, Any]) -> None:
+    windows = info.get("unifiedWindows") or {}
+    five = windows.get("five_hour") or {}
+    seven = windows.get("seven_day") or {}
+    if not five and not seven:
+        return
+    with Session(engine) as db:
+        db.add(RateLimitSnapshot(
+            ts=_now(),
+            run_id=run_id,
+            status=info.get("status"),
+            five_hour_utilization=five.get("utilization"),
+            five_hour_resets_at=_epoch(five.get("resetsAt")),
+            seven_day_utilization=seven.get("utilization"),
+            seven_day_resets_at=_epoch(seven.get("resetsAt")),
+            overage_status=info.get("overageStatus"),
+        ))
+        db.commit()
+
+
+def _watch(run_id: int, proc: subprocess.Popen, prompt: str, budget: float, minutes: int) -> None:
     writer = _EventWriter(run_id)
     state: dict[str, Any] = {}
     stderr_tail: deque[str] = deque(maxlen=20)
@@ -330,7 +385,7 @@ def _watch(run_id: int, proc: subprocess.Popen, prompt: str) -> None:
                 writer.add("stderr", {"text": _truncate(text, TOOL_RESULT_LIMIT)})
                 sent += 1
 
-    timer = threading.Timer(settings.runner_max_minutes * 60, _kill, args=(run_id, "timeout"))
+    timer = threading.Timer(minutes * 60, _kill, args=(run_id, "timeout"))
     timer.daemon = True
     stderr_thread = threading.Thread(target=read_stderr, daemon=True)
     try:
@@ -354,23 +409,27 @@ def _watch(run_id: int, proc: subprocess.Popen, prompt: str) -> None:
 
     reason = _kill_reasons.pop(run_id, None)
     result = state.get("result")
+    stop_reason: str | None = None
     if reason == "stopped":
-        status, error = "stopped", "사용자가 중단했습니다"
+        status, error, stop_reason = "stopped", "사용자가 중단했습니다", "stopped"
     elif reason == "timeout":
-        status, error = "failed", f"시간 제한({settings.runner_max_minutes}분)을 넘어 중단했습니다"
+        status, error, stop_reason = "failed", f"시간 한도({minutes}분)를 넘어 멈췄습니다. [이어서 계속]으로 이어 갈 수 있습니다.", "timeout"
     elif result is None:
         tail = " / ".join(list(stderr_tail)[-3:])
-        status, error = "failed", f"결과 없이 종료됐습니다 (종료 코드 {code}){': ' + tail if tail else ''}"
+        status, error, stop_reason = "failed", f"결과 없이 종료됐습니다 (종료 코드 {code}){': ' + tail if tail else ''}", "error"
+    elif result.get("subtype") == "error_max_budget_usd" or result.get("terminal_reason") == "budget_exhausted":
+        status, error, stop_reason = "failed", f"비용 한도(${budget:g})에 도달해 멈췄습니다. [이어서 계속]으로 이어 갈 수 있습니다.", "budget"
     elif result.get("is_error") or result.get("subtype") != "success":
-        status, error = "failed", f"{result.get('subtype')}: {str(result.get('result') or '')[:300]}"
+        status, error, stop_reason = "failed", f"{result.get('subtype')}: {str(result.get('result') or '')[:300]}", "error"
     else:
         status, error = "succeeded", None
     if error:
-        writer.add("error", {"text": error})
+        writer.add("error", {"text": error, "stop_reason": stop_reason})
     _finish(
         run_id,
         status=status,
         error=error,
+        stop_reason=stop_reason,
         exit_code=code,
         session_id=state.get("session_id"),
         commit_message=extract_commit_message(str((result or {}).get("result") or "")),
@@ -390,11 +449,13 @@ def _safe_scan(run_scan) -> None:
 
 
 def _finish(run_id: int, *, status: str, error: str | None, exit_code: int | None = None,
-            session_id: str | None = None, commit_message: str | None = None) -> None:
+            session_id: str | None = None, commit_message: str | None = None,
+            stop_reason: str | None = None) -> None:
     with Session(engine) as db:
         run = db.get(Run, run_id)
         run.status = status
         run.error = error
+        run.stop_reason = stop_reason
         run.exit_code = exit_code
         run.ended_at = _now()
         if session_id and not run.session_id:
@@ -432,6 +493,7 @@ def recover_orphans() -> None:
                 _kill_tree(run.pid)
             run.status = "failed"
             run.error = "서버가 다시 시작되어 실행이 중단됐습니다"
+            run.stop_reason = "restart"
             run.ended_at = _now()
             db.add(run)
             task = db.get(Task, run.task_id)

@@ -71,6 +71,9 @@ class Task(SQLModel, table=True):
     commit_message: str | None = None  # Claude가 제안한 커밋 메시지 (사람이 고칠 수 있음)
     commit_sha: str | None = None
     committed_at: datetime | None = _ts(default=None)
+    # 이 작업의 실행 한도. 비어 있으면 .env 의 기본값(RUNNER_MAX_BUDGET_USD / RUNNER_MAX_MINUTES)
+    max_budget_usd: float | None = None
+    max_minutes: int | None = None
 
 
 class Run(SQLModel, table=True):
@@ -87,6 +90,9 @@ class Run(SQLModel, table=True):
     ended_at: datetime | None = _ts(default=None)
     exit_code: int | None = None
     error: str | None = None
+    stop_reason: str | None = None  # budget | timeout | stopped | error | restart (성공이면 None)
+    max_budget_usd: float | None = None  # 이 실행에 적용한 한도
+    max_minutes: int | None = None
     model: str | None = None
     num_turns: int | None = None
     input_tokens: int = Field(default=0, sa_type=BigInteger)
@@ -107,3 +113,19 @@ class RunEvent(SQLModel, table=True):
     ts: datetime = _ts()
     kind: str  # init | text | tool_use | tool_result | result | error | stderr
     payload: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))
+
+
+class RateLimitSnapshot(SQLModel, table=True):
+    """Claude Code가 실행 중에 알려주는 구독 사용 한도 사용률 (0~1)."""
+
+    __tablename__ = "rate_limit_snapshot"
+
+    id: int | None = Field(default=None, primary_key=True)
+    ts: datetime = _ts(index=True)
+    run_id: int | None = Field(default=None, foreign_key="run.id")
+    status: str | None = None
+    five_hour_utilization: float | None = None
+    five_hour_resets_at: datetime | None = _ts(default=None)
+    seven_day_utilization: float | None = None
+    seven_day_resets_at: datetime | None = _ts(default=None)
+    overage_status: str | None = None

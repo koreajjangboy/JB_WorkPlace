@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
-import { api, taskApi } from "../api";
+import { api, taskApi, type Limits } from "../api";
 import { Button, Card, ErrorBox, Loading } from "../components";
+import { LimitPicker, describeLimits } from "../limits";
 import { useAsync } from "../useAsync";
 
 export default function NewTaskPage() {
@@ -13,6 +14,7 @@ export default function NewTaskPage() {
   const [prompt, setPrompt] = useState("");
   const [submitting, setSubmitting] = useState<"save" | "run" | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [limits, setLimits] = useState<Limits>({ max_budget_usd: null, max_minutes: null });
 
   const projects = useMemo(() => data?.[0] ?? [], [data]);
   const project = projects.find((p) => p.id === projectId) ?? null;
@@ -29,7 +31,7 @@ export default function NewTaskPage() {
     setSubmitting(runNow ? "run" : "save");
     setFormError(null);
     try {
-      const task = await taskApi.create({ project_id: projectId, prompt, title: title || undefined, run_now: runNow });
+      const task = await taskApi.create({ project_id: projectId, prompt, title: title || undefined, run_now: runNow, ...limits });
       navigate(`/tasks/${task.id}`);
     } catch (e) {
       setFormError((e as Error).message);
@@ -96,6 +98,13 @@ export default function NewTaskPage() {
             />
           </label>
 
+          <div>
+            <span className="mb-1 block text-sm font-medium">
+              실행 한도 <span className="font-normal text-zinc-500">(실행 1회 기준, 넘으면 멈추고 [이어서 계속]으로 이어 갈 수 있음)</span>
+            </span>
+            <LimitPicker value={limits} onChange={setLimits} runner={runner} />
+          </div>
+
           {formError && <p className="text-sm text-red-600 dark:text-red-400">{formError}</p>}
 
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -120,7 +129,7 @@ export default function NewTaskPage() {
           <li>· 프로젝트 폴더 안에서만 파일을 읽고 고칩니다. 커밋, push, 삭제, 인터넷 접속은 막혀 있습니다.</li>
           <li>· 허용된 명령: 테스트, 빌드, 린트, git diff/status/log 같은 읽기 전용 명령</li>
           <li>
-            · 한 번 실행에 최대 {runner.max_minutes}분, ${runner.max_budget_usd}까지 · 동시에 {runner.max_concurrent}개
+            · 이 작업의 실행 한도: {describeLimits(limits, runner)} · 동시에 {runner.max_concurrent}개
           </li>
           <li>· 허용 목록에 없는 동작은 묻지 않고 거부되며, 실행 기록에 표시됩니다.</li>
         </ul>
