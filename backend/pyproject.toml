@@ -1,0 +1,23 @@
+[project]
+name = "jb-workplace"
+version = "0.1.0"
+description = "JB WorkPlace backend: AI work dashboard and workplace"
+authors = [
+    { name = "koreajjangboy", email = "koreajjangboy@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.20.1",
+    "fastapi>=0.163.1",
+    "psycopg[binary]>=3.3.9",
+    "pydantic-settings>=2.16.3",
+    "sqlmodel>=0.0.50",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+jb-workplace = "jb_workplace:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
