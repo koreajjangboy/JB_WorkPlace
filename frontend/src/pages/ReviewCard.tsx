@@ -12,7 +12,9 @@ export default function ReviewCard({ task, onChanged }: { task: TaskDetail; onCh
   const project = useAsync(() => api.project(task.project_id), [task.project_id, task.updated_at]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState<"commit" | "complete" | null>(null);
+  const [busy, setBusy] = useState<"commit" | "complete" | "revert" | null>(null);
+  const [confirmRevert, setConfirmRevert] = useState(false);
+  const [revertDone, setRevertDone] = useState<number | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [pushAfter, setPushAfter] = useState(true);
   const [lastCommit, setLastCommit] = useState<(PushResult & { sha: string }) | null>(null);
@@ -27,6 +29,8 @@ export default function ReviewCard({ task, onChanged }: { task: TaskDetail; onCh
 
   const files = useMemo(() => data?.files ?? [], [data]);
   const preExistingSelected = files.some((f) => f.pre_existing && selected.has(f.path));
+  const selectedFiles = files.filter((f) => selected.has(f.path));
+  const blocked = selectedFiles.filter((f) => !f.revertable);
 
   function toggle(path: string) {
     setFormError(null);
@@ -46,6 +50,23 @@ export default function ReviewCard({ task, onChanged }: { task: TaskDetail; onCh
     try {
       const res = await reviewApi.commit(task.id, message, [...selected], pushAfter && hasRemote);
       setLastCommit(res);
+      reload();
+      project.reload();
+      onChanged();
+    } catch (e) {
+      setFormError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function doRevert() {
+    setBusy("revert");
+    setFormError(null);
+    try {
+      const res = await reviewApi.revert(task.id, [...selected]);
+      setConfirmRevert(false);
+      setRevertDone(res.reverted.length);
       reload();
       project.reload();
       onChanged();
@@ -166,8 +187,48 @@ export default function ReviewCard({ task, onChanged }: { task: TaskDetail; onCh
 
           {formError && <p className="text-sm text-red-600 dark:text-red-400">{formError}</p>}
 
+          {revertDone != null && (
+            <div className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm dark:border-zinc-800 dark:bg-zinc-900">
+              파일 {revertDone}개를 작업 전 상태로 되돌렸습니다.
+            </div>
+          )}
+
+          {confirmRevert && (
+            <div className="rounded-lg border border-red-300 bg-red-50 p-3 dark:border-red-900 dark:bg-red-950/30">
+              <div className="text-sm font-medium text-red-800 dark:text-red-300">이 파일들을 작업 전 상태로 되돌릴까요? 되돌린 내용은 복구할 수 없습니다.</div>
+              <ul className="mt-2 space-y-1 text-xs">
+                {selectedFiles.map((f) => (
+                  <li key={f.path} className="[overflow-wrap:anywhere]">
+                    <code className="font-mono">{f.path}</code>{" "}
+                    <span className={f.revertable ? "text-zinc-600 dark:text-zinc-400" : "text-red-700 dark:text-red-400"}>
+                      — {f.revert_note}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              {blocked.length > 0 && (
+                <p className="mt-2 text-xs text-red-700 dark:text-red-400">되돌릴 수 없는 파일 {blocked.length}개를 선택에서 빼야 합니다.</p>
+              )}
+              <div className="mt-2 flex justify-end gap-2">
+                <Button onClick={() => setConfirmRevert(false)}>취소</Button>
+                <Button variant="danger" onClick={doRevert} disabled={busy !== null || blocked.length > 0}>
+                  {busy === "revert" ? "되돌리는 중…" : `되돌리기 (${selected.size}개 파일)`}
+                </Button>
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-wrap items-center justify-end gap-2">
             <span className="mr-auto text-xs text-zinc-500">커밋은 이 PC의 git 설정(이름, 이메일)으로 합니다.</span>
+            {files.length > 0 && data.tracked && !confirmRevert && (
+              <Button
+                variant="danger"
+                onClick={() => (selected.size === 0 ? setFormError("되돌릴 파일을 고르세요.") : (setConfirmRevert(true), setRevertDone(null)))}
+                disabled={busy !== null}
+              >
+                되돌리기…
+              </Button>
+            )}
             {files.length > 0 && hasRemote && (
               <label className="flex items-center gap-1.5 text-sm text-zinc-700 dark:text-zinc-300">
                 <input type="checkbox" checked={pushAfter} onChange={(e) => setPushAfter(e.target.checked)} />

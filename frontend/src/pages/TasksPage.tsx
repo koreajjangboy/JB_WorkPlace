@@ -4,6 +4,7 @@ import { taskApi, type Task } from "../api";
 import { Card, Empty, ErrorBox, Loading, StatusBadge } from "../components";
 import { relativeTime, usd } from "../format";
 import { useAsync } from "../useAsync";
+import TaskBoard from "./TaskBoard";
 
 const FILTERS: [string, string][] = [
   ["", "전체"],
@@ -36,9 +37,28 @@ export function TaskRow({ t, showProject = true }: { t: Task; showProject?: bool
   );
 }
 
+function loadView(): "board" | "list" {
+  try {
+    return localStorage.getItem("tasks.view") === "list" ? "list" : "board";
+  } catch {
+    return "board";
+  }
+}
+
 export default function TasksPage() {
   const [filter, setFilter] = useState("");
-  const tasks = useAsync(() => taskApi.list({ status: filter || undefined }), [filter]);
+  const [view, setView] = useState<"board" | "list">(loadView);
+  const effectiveFilter = view === "board" ? "" : filter;
+  const tasks = useAsync(() => taskApi.list({ status: effectiveFilter || undefined }), [effectiveFilter]);
+
+  function changeView(next: "board" | "list") {
+    setView(next);
+    try {
+      localStorage.setItem("tasks.view", next);
+    } catch {
+      /* 저장 못 해도 화면은 바뀐다 */
+    }
+  }
   const counts = useAsync(() => taskApi.counts(), []);
   const anyRunning = (counts.data?.running ?? 0) > 0;
 
@@ -58,7 +78,18 @@ export default function TasksPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="mr-2 text-lg font-semibold">작업</h1>
-        {FILTERS.map(([value, label]) => {
+        <div className="mr-2 inline-flex overflow-hidden rounded-md border border-zinc-300 text-xs dark:border-zinc-700">
+          {(["board", "list"] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => changeView(v)}
+              className={`px-3 py-1 ${view === v ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900" : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"}`}
+            >
+              {v === "board" ? "보드" : "목록"}
+            </button>
+          ))}
+        </div>
+        {view === "list" && FILTERS.map(([value, label]) => {
           const n = value ? counts.data?.[value] ?? 0 : total;
           return (
             <button
@@ -86,6 +117,8 @@ export default function TasksPage() {
         <ErrorBox message={tasks.error} />
       ) : tasks.loading && !tasks.data ? (
         <Loading />
+      ) : view === "board" ? (
+        <TaskBoard tasks={tasks.data ?? []} />
       ) : (
         <Card>
           {tasks.data && tasks.data.length > 0 ? (

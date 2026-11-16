@@ -217,6 +217,8 @@ export type FileChange = {
   deletions: number | null;
   binary: boolean;
   size_bytes: number | null;
+  revertable?: boolean | null;
+  revert_note?: string | null;
 };
 
 export type Changes = {
@@ -234,6 +236,8 @@ export const reviewApi = {
   commit: (taskId: number, message: string, files: string[], push = false) =>
     request<PushResult & { task: Task; sha: string }>(`/api/tasks/${taskId}/commit`, json({ message, files, push })),
   complete: (taskId: number) => request<Task>(`/api/tasks/${taskId}/complete`, { method: "POST" }),
+  revert: (taskId: number, files: string[]) =>
+    request<{ reverted: string[] }>(`/api/tasks/${taskId}/revert`, json({ files })),
 };
 
 // ---------------------------------------------------------------- 프로젝트의 저장 안 된 변경 전체
@@ -248,6 +252,10 @@ export const projectChangesApi = {
     request<PushResult & { sha: string }>(`/api/projects/${projectId}/commit`, json({ files, message, push })),
   push: (projectId: number) =>
     request<PushResult & { ahead: number; behind: number; upstream: string | null }>(`/api/projects/${projectId}/push`, {
+      method: "POST",
+    }),
+  fetch: (projectId: number) =>
+    request<{ output: string; ahead: number; behind: number; upstream: string | null }>(`/api/projects/${projectId}/fetch`, {
       method: "POST",
     }),
 };

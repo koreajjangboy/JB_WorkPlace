@@ -7,6 +7,7 @@ from sqlmodel import Session
 from .commit_message import CommitMessageError, draft_commit_message
 from .db import get_session
 from .gitops import GitError, all_changes, as_dict, commit, file_diff
+from .gitops import fetch as git_fetch
 from .gitops import push as git_push
 from .models import Project
 from .sync import refresh_project
@@ -105,3 +106,17 @@ def project_push(project_id: int, db: Session = Depends(get_session)) -> dict:
     project = db.get(Project, project_id)
     db.refresh(project)
     return {**result, "ahead": project.ahead, "behind": project.behind, "upstream": project.upstream}
+
+
+@router.post("/fetch")
+def project_fetch(project_id: int, db: Session = Depends(get_session)) -> dict:
+    """원격의 최신 상태를 가져와 '원격에 새 커밋 N'을 갱신한다 (내 파일은 바꾸지 않음)."""
+    repo = _repo(db, project_id)
+    try:
+        output = git_fetch(repo)
+    except GitError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    refresh_project(project_id)
+    project = db.get(Project, project_id)
+    db.refresh(project)
+    return {"output": output, "ahead": project.ahead, "behind": project.behind, "upstream": project.upstream}

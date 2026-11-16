@@ -64,20 +64,40 @@ def _status(repo: str) -> dict[str, str]:
     return entries
 
 
-def _hashes(repo: str, paths: list[str]) -> dict[str, str]:
+BLOB_STORE_LIMIT = 5_000_000  # 이보다 큰 파일은 되돌리기용 사본을 저장하지 않는다
+
+
+def _hashes(repo: str, paths: list[str], write: bool = False) -> dict[str, str]:
+    """파일 내용 그대로(줄바꿈 변환 없이)의 해시. write=True면 git 객체로도 저장해 나중에 복원할 수 있게 한다."""
     existing = [p for p in paths if (Path(repo) / p).is_file()]
     result = {p: "deleted" for p in paths if p not in existing}
-    if existing:
-        out = _git(repo, "hash-object", "--stdin-paths", stdin="\n".join(existing) + "\n")
-        for path, digest in zip(existing, out.split()):
+    groups: list[tuple[list[str], bool]] = []
+    if write:
+        small = [p for p in existing if (Path(repo) / p).stat().st_size <= BLOB_STORE_LIMIT]
+        groups = [(small, True), ([p for p in existing if p not in small], False)]
+    else:
+        groups = [(existing, False)]
+    for group, store in groups:
+        if not group:
+            continue
+        args = ["hash-object", "--no-filters", "--stdin-paths"] + (["-w"] if store else [])
+        out = _git(repo, *args, stdin="\n".join(group) + "\n")
+        for path, digest in zip(group, out.split()):
             result[path] = digest
     return result
 
 
 def snapshot(repo: str) -> dict[str, dict[str, str]]:
+    """저장 안 된 변경 목록과 각 파일 내용. 5MB 이하 파일은 내용 사본도 git 객체로 저장한다."""
     status = _status(repo)
-    hashes = _hashes(repo, list(status))
-    return {path: {"status": code, "hash": hashes.get(path, "")} for path, code in status.items()}
+    hashes = _hashes(repo, list(status), write=True)
+    snap: dict[str, dict[str, str]] = {}
+    for path, code in status.items():
+        digest = hashes.get(path, "")
+        file = Path(repo) / path
+        stored = digest != "deleted" and file.is_file() and file.stat().st_size <= BLOB_STORE_LIMIT
+        snap[path] = {"status": code, "hash": digest, "stored": "1" if stored else ""}
+    return snap
 
 
 @dataclass
@@ -117,9 +137,17 @@ def task_changes(repo: str, baseline: dict[str, dict[str, str]] | None) -> list[
         elif before.get("hash") != hashes.get(path):
             changes.append(FileChange(path, code, _kind(code), pre_existing=True))
 
+    # 작업 전엔 변경이 있었는데 지금은 git 상태에서 사라진 파일:
+    # 새로 만들어 둔 파일을 작업이 지웠거나, 직접 바꿔 둔 내용을 작업이 커밋 상태로 되돌린 경우다.
+    if baseline:
+        for path in baseline:
+            if path not in status:
+                gone = not (Path(repo) / path).exists()
+                changes.append(FileChange(path, "--", "deleted" if gone else "modified", pre_existing=True))
+
     binary_paths: set[str] = set()
     if changes and _has_head(repo):
-        tracked = [c.path for c in changes if c.status != "??"]
+        tracked = [c.path for c in changes if c.status not in ("??", "--")]
         if tracked:
             out = _git(repo, "diff", "HEAD", "--numstat", "-z", "--", *tracked, check=False)
             stats: dict[str, tuple[int | None, int | None]] = {}
@@ -161,6 +189,10 @@ def all_changes(repo: str) -> list[FileChange]:
 
 
 def file_diff(repo: str, path: str, status: str) -> str:
+    if status == "--":
+        if not (Path(repo) / path).exists():
+            return "(작업 전에 커밋하지 않고 만들어 둔 파일인데, 작업 중에 지워졌습니다. 되돌리기로 복원할 수 있습니다)"
+        return "(작업 전에 직접 바꿔 둔 내용이 작업 중에 마지막 커밋 상태로 돌아갔습니다. 되돌리기로 복원할 수 있습니다)"
     if status == "??" or not _has_head(repo):
         file = Path(repo) / path
         try:
@@ -186,9 +218,100 @@ def commit(repo: str, files: list[str], message: str) -> str:
         raise GitError("커밋할 파일을 하나 이상 고르세요")
     if not message.strip():
         raise GitError("커밋 메시지를 입력하세요")
+    # git 상태에 없는 파일(지워진 미추적 파일 등)은 커밋할 것이 없으니 뺀다.
+    dirty = _status(repo)
+    files = [f for f in files if f in dirty]
+    if not files:
+        raise GitError("고른 파일 중 커밋할 변경이 있는 파일이 없습니다")
     _git(repo, "add", "-A", "--", *files)
     _git(repo, "commit", "-F", "-", "--only", "--", *files, stdin=message.strip() + "\n")
     return _git(repo, "rev-parse", "HEAD").strip()
+
+
+def _safe_path(repo: str, rel: str) -> Path:
+    root = Path(repo).resolve()
+    target = (root / rel).resolve()
+    if root != target and root not in target.parents:
+        raise GitError(f"저장소 밖 경로입니다: {rel}")
+    return target
+
+
+def _in_head(repo: str, path: str) -> bool:
+    return bool(_has_head(repo)) and subprocess.run(
+        ["git", "-C", repo, "cat-file", "-e", f"HEAD:{path}"],
+        capture_output=True,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    ).returncode == 0
+
+
+def revertable(baseline: dict[str, dict[str, str]] | None, change: "FileChange") -> tuple[bool, str]:
+    """(되돌릴 수 있는지, 되돌리면 어떻게 되는지)"""
+    if baseline is None:
+        return False, "변경 추적 전에 실행된 작업이라 되돌릴 수 없습니다"
+    before = baseline.get(change.path)
+    if before is None:
+        return True, "새로 생긴 파일이라 지워집니다" if change.kind == "added" else "작업 전 상태(마지막 커밋)로 돌아갑니다"
+    if before.get("hash") == "deleted":
+        return True, "작업 전처럼 다시 지워집니다"
+    if before.get("stored"):
+        return True, "작업 전 내용(직접 바꿔 둔 내용 포함)으로 돌아갑니다"
+    return False, "큰 파일이라 작업 전 내용을 저장해 두지 않았습니다"
+
+
+def revert(repo: str, baseline: dict[str, dict[str, str]], changes: list["FileChange"]) -> list[str]:
+    """작업이 바꾼 파일을 첫 실행 직전 상태로 돌린다. 되돌린 경로 목록을 돌려준다."""
+    done: list[str] = []
+    for change in changes:
+        ok, reason = revertable(baseline, change)
+        if not ok:
+            raise GitError(f"{change.path}: {reason}")
+        target = _safe_path(repo, change.path)
+        before = baseline.get(change.path)
+        if before is None:
+            if _in_head(repo, change.path):
+                _git(repo, "restore", "--source=HEAD", "--staged", "--worktree", "--", change.path)
+            else:
+                _git(repo, "rm", "--cached", "-q", "--ignore-unmatch", "--", change.path, check=False)
+                if target.is_file():
+                    target.unlink()
+        elif before.get("hash") == "deleted":
+            if target.is_file():
+                target.unlink()
+        else:
+            # 작업 전 내용(줄바꿈까지 그대로)을 git 객체에서 꺼내 다시 쓴다.
+            result = subprocess.run(
+                ["git", "-C", repo, "cat-file", "blob", before["hash"]],
+                capture_output=True,
+                timeout=GIT_TIMEOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+            if result.returncode != 0:
+                raise GitError(f"{change.path}: 저장해 둔 작업 전 내용을 찾지 못했습니다")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(result.stdout)
+        done.append(change.path)
+    return done
+
+
+def fetch(repo: str) -> str:
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo, "fetch", "--prune"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=PUSH_TIMEOUT,
+            env=env,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitError("원격 확인이 시간 안에 끝나지 않았습니다. 네트워크를 확인하세요.") from exc
+    output = ((result.stdout or "") + (result.stderr or "")).strip()
+    if result.returncode != 0:
+        raise GitError(output or "git fetch 실패")
+    return output
 
 
 PUSH_TIMEOUT = 120

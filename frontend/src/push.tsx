@@ -31,6 +31,21 @@ export function PushOutcome({ result, sha }: { result: PushResult | null; sha?: 
 export function PushBar({ project, onPushed }: { project: Project; onPushed: () => void }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PushResult | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
+  async function fetchRemote() {
+    setFetching(true);
+    setFetchError(null);
+    try {
+      await projectChangesApi.fetch(project.id);
+      onPushed();
+    } catch (e) {
+      setFetchError((e as Error).message);
+    } finally {
+      setFetching(false);
+    }
+  }
 
   if (!project.has_remote) {
     return <span className="text-xs text-zinc-500">원격 저장소 없음 (push할 곳이 없습니다)</span>;
@@ -62,7 +77,18 @@ export function PushBar({ project, onPushed }: { project: Project; onPushed: () 
             {busy ? "push 중…" : project.upstream ? `push (${project.ahead}개 커밋)` : "push (원격 브랜치 만들기)"}
           </Button>
         )}
+        {project.upstream && (
+          <button
+            onClick={fetchRemote}
+            disabled={fetching}
+            className="text-blue-600 hover:underline disabled:opacity-60 dark:text-blue-400"
+            title="원격의 최신 상태를 가져옵니다 (내 파일은 바꾸지 않음)"
+          >
+            {fetching ? "확인 중…" : "원격 확인"}
+          </button>
+        )}
       </div>
+      {fetchError && <PushOutcome result={{ pushed: false, push_output: null, push_error: fetchError }} />}
       {result && <PushOutcome result={result} />}
     </div>
   );

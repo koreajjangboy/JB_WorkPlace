@@ -12,7 +12,7 @@ from sqlmodel import Session, select
 from .config import get_settings
 from .db import engine, get_session
 from .models import Project, RateLimitSnapshot, Run, RunEvent, Task
-from .gitops import GitError, as_dict, commit, file_diff, task_changes
+from .gitops import GitError, as_dict, commit, file_diff, revert, revertable, task_changes
 from .gitops import push as git_push
 from .sync import refresh_project
 from .runner import (
@@ -393,6 +393,8 @@ class FileChangeOut(BaseModel):
     deletions: int | None
     binary: bool = False
     size_bytes: int | None = None
+    revertable: bool | None = None  # 작업 검토 화면에서만: 작업 전 상태로 되돌릴 수 있는지
+    revert_note: str | None = None
 
 
 class ChangesOut(BaseModel):
@@ -429,7 +431,11 @@ def get_changes(task_id: int, db: Session = Depends(get_session)) -> ChangesOut:
     files = _changes(db, task)
     return ChangesOut(
         tracked=task.baseline is not None,
-        files=[FileChangeOut(**as_dict(f)) for f in files],
+        files=[
+            FileChangeOut(**as_dict(f), revertable=ok, revert_note=note)
+            for f in files
+            for ok, note in [revertable(task.baseline, f)]
+        ],
         commit_message=task.commit_message,
         commit_sha=task.commit_sha,
         committed_at=task.committed_at,
@@ -489,3 +495,30 @@ def complete_task(task_id: int, db: Session = Depends(get_session)) -> TaskOut:
     db.commit()
     db.refresh(task)
     return _task_outs(db, [task])[0]
+
+
+class RevertIn(BaseModel):
+    files: list[str] = Field(min_length=1, max_length=2000)
+
+
+@router.post("/tasks/{task_id}/revert")
+def revert_task(task_id: int, body: RevertIn, db: Session = Depends(get_session)) -> dict:
+    """작업이 바꾼 파일 중 고른 것을 첫 실행 직전 상태로 되돌린다."""
+    task = _get_task(db, task_id)
+    if task.status == "running":
+        raise HTTPException(409, "실행 중에는 되돌릴 수 없습니다")
+    if task.baseline is None:
+        raise HTTPException(409, "변경 추적 전에 실행된 작업이라 되돌릴 수 없습니다")
+    by_path = {c.path: c for c in _changes(db, task)}
+    unknown = [p for p in body.files if p not in by_path]
+    if unknown:
+        raise HTTPException(400, f"이 작업의 변경 파일이 아닌 항목이 있습니다: {', '.join(unknown[:5])}")
+    try:
+        reverted = revert(_project_repo(db, task), task.baseline, [by_path[p] for p in body.files])
+    except GitError as exc:
+        raise HTTPException(409, f"되돌리지 못했습니다: {exc}") from exc
+    task.updated_at = datetime.now(UTC)
+    db.add(task)
+    db.commit()
+    refresh_project(task.project_id)
+    return {"reverted": reverted}
