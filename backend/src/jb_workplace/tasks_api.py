@@ -15,8 +15,10 @@ from .models import Project, RateLimitSnapshot, Run, RunEvent, Task
 from .gitops import GitError, as_dict, commit, file_diff, revert, revertable, task_changes
 from .gitops import push as git_push
 from .sync import refresh_project
+from .usage import UsageIn, record_usage
 from .runner import (
     CONTINUE_PROMPT,
+    check_rate_limit,
     MAX_BUDGET_CAP_USD,
     MAX_MINUTES_CAP,
     RunnerError,
@@ -522,3 +524,20 @@ def revert_task(task_id: int, body: RevertIn, db: Session = Depends(get_session)
     db.commit()
     refresh_project(task.project_id)
     return {"reverted": reverted}
+
+
+@router.post("/usage/limits/refresh", response_model=RateLimitOut)
+def refresh_rate_limit(db: Session = Depends(get_session)) -> RateLimitOut:
+    """[지금 확인]: 아주 짧은 Claude 실행으로 최신 사용 한도를 받아 온다 (한도를 아주 조금 쓴다)."""
+    try:
+        _, cost, tokens = check_rate_limit()
+    except RunnerError as exc:
+        raise HTTPException(exc.status_code, str(exc)) from exc
+    record_usage(db, UsageIn(
+        provider="claude", unit="token", model=tokens.get("model"), cost_usd=cost,
+        input_tokens=tokens.get("input_tokens", 0), output_tokens=tokens.get("output_tokens", 0),
+        cache_write_tokens=tokens.get("cache_write_tokens", 0), cache_read_tokens=tokens.get("cache_read_tokens", 0),
+        source="limit_check", project="JB_WorkPlace", meta={"purpose": "usage limit check"},
+    ))
+    row = db.exec(select(RateLimitSnapshot).order_by(RateLimitSnapshot.ts.desc()).limit(1)).first()
+    return RateLimitOut(**row.model_dump(include=set(RateLimitOut.model_fields)))

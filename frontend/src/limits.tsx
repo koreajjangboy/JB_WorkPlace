@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { Limits, RateLimit, RunnerStatus } from "./api";
+import { taskApi, type Limits, type RateLimit, type RunnerStatus } from "./api";
 import { relativeTime } from "./format";
 
 const LONG: Limits = { max_budget_usd: 10, max_minutes: 120 };
@@ -126,10 +126,47 @@ function Meter({ label, value, resetsAt }: { label: string; value: number | null
   );
 }
 
-/** Claude 구독 사용 한도 (5시간·7일). WorkPlace 실행 때 Claude Code가 알려준 마지막 값. */
-export function RateLimitView({ data }: { data: RateLimit | null }) {
+/** Claude 구독 사용 한도 (5시간·7일). WorkPlace 실행 때 Claude Code가 알려준 마지막 값 + [지금 확인]. */
+export function RateLimitView({ data: initial }: { data: RateLimit | null }) {
+  const [data, setData] = useState<RateLimit | null>(initial);
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => setData(initial), [initial]);
+
+  async function check() {
+    setChecking(true);
+    setError(null);
+    try {
+      setData(await taskApi.refreshRateLimit());
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  const button = (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-[11px] text-zinc-500">확인할 때마다 한도를 아주 조금 씁니다 (가장 가벼운 모델로 짧게 실행)</span>
+      <button
+        onClick={check}
+        disabled={checking}
+        className="shrink-0 rounded-md border border-zinc-300 px-2.5 py-1 text-xs hover:bg-zinc-100 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+      >
+        {checking ? "확인 중…" : "지금 확인"}
+      </button>
+    </div>
+  );
+
   if (!data) {
-    return <p className="text-xs text-zinc-500">WorkPlace에서 작업을 한 번 실행하면 Claude 사용 한도가 여기에 표시됩니다.</p>;
+    return (
+      <div className="space-y-2.5">
+        <p className="text-xs text-zinc-500">아직 받은 사용 한도 정보가 없습니다.</p>
+        {button}
+        {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+      </div>
+    );
   }
   return (
     <div className="space-y-2.5">
@@ -139,6 +176,8 @@ export function RateLimitView({ data }: { data: RateLimit | null }) {
         {relativeTime(data.ts)} 기준 · 터미널 등 다른 곳에서 쓴 사용량도 포함된 값입니다
         {data.overage_status === "rejected" && " · 한도를 넘으면 추가 과금 없이 사용이 제한됩니다"}
       </p>
+      {button}
+      {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
     </div>
   );
 }

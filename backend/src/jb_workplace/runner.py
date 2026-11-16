@@ -504,3 +504,52 @@ def recover_orphans() -> None:
         db.commit()
         if runs:
             log.warning("중단된 실행 %d개를 정리했습니다", len(runs))
+
+
+# ---------------------------------------------------------------- 사용 한도 지금 확인
+
+
+def check_rate_limit() -> tuple[bool, float | None, dict[str, int]]:
+    """가장 가벼운 모델로 한 단어짜리 실행을 해서 Claude가 알려주는 사용 한도를 받아 저장한다.
+
+    (저장했는지, 환산 비용, 토큰 사용량)을 돌려준다. 도구 없음, 세션 기록 남기지 않음.
+    """
+    exe = get_settings().resolved_claude_exe
+    if not exe:
+        raise RunnerError("claude 실행 파일을 찾지 못했습니다", 503)
+    args = [
+        exe, "-p", "--output-format", "stream-json", "--verbose",
+        "--restricted", "--strict-mcp-config", "--tools", "",
+        "--permission-mode", "manual", "--permission-prompts", "none",
+        "--no-session-persistence", "--model", "haiku", "--max-budget-usd", "0.05",
+    ]
+    try:
+        proc = subprocess.run(
+            args, input="Reply with the single word: ok", capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=90,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RunnerError(f"사용 한도를 확인하지 못했습니다: {exc}", 502) from exc
+    saved, cost, tokens = False, None, {}
+    for line in proc.stdout.splitlines():
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if msg.get("type") == "rate_limit_event":
+            _save_rate_limit(None, msg.get("rate_limit_info") or {})
+            saved = True
+        elif msg.get("type") == "result":
+            cost = msg.get("total_cost_usd")
+            u = msg.get("usage") or {}
+            tokens = {
+                "model": next(iter(msg.get("modelUsage") or {}), None),
+                "input_tokens": int(u.get("input_tokens") or 0),
+                "output_tokens": int(u.get("output_tokens") or 0),
+                "cache_write_tokens": int(u.get("cache_creation_input_tokens") or 0),
+                "cache_read_tokens": int(u.get("cache_read_input_tokens") or 0),
+            }
+    if not saved:
+        raise RunnerError("Claude가 사용 한도 정보를 보내지 않았습니다. 잠시 뒤 다시 시도하세요.", 502)
+    return saved, cost, tokens

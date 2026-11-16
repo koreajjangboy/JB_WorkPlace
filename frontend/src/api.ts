@@ -196,6 +196,7 @@ export const taskApi = {
     request<Task>(`/api/tasks/${id}/limits`, { ...json(limits), method: "PUT" }),
   continue: (id: number) => request<Run>(`/api/tasks/${id}/continue`, { method: "POST" }),
   rateLimit: () => request<RateLimit | null>("/api/usage/limits"),
+  refreshRateLimit: () => request<RateLimit>("/api/usage/limits/refresh", { method: "POST" }),
   remove: async (id: number) => {
     const res = await fetch(`/api/tasks/${id}`, { method: "DELETE" });
     if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? res.statusText);
