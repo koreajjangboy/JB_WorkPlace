@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router";
-import { api, projectChangesApi } from "../api";
+import { api, projectChangesApi, type PushResult } from "../api";
 import { FileRow, LARGE_FILE_BYTES, formatBytes } from "../changes";
 import { Badge, Button, Card, Empty, ErrorBox, Loading } from "../components";
 import { usd } from "../format";
+import { PushBar, PushOutcome } from "../push";
 import { useAsync } from "../useAsync";
 
 export default function ProjectChangesPage() {
@@ -16,7 +17,8 @@ export default function ProjectChangesPage() {
   const [draftInfo, setDraftInfo] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [committed, setCommitted] = useState<{ sha: string; count: number } | null>(null);
+  const [committed, setCommitted] = useState<(PushResult & { sha: string }) | null>(null);
+  const [pushAfter, setPushAfter] = useState(true);
 
   const files = useMemo(() => changes.data ?? [], [changes.data]);
 
@@ -66,8 +68,8 @@ export default function ProjectChangesPage() {
     setCommitting(true);
     setFormError(null);
     try {
-      const res = await projectChangesApi.commit(id, [...selected], message);
-      setCommitted({ sha: res.sha, count: selected.size });
+      const res = await projectChangesApi.commit(id, [...selected], message, pushAfter && !!project.data?.has_remote);
+      setCommitted(res);
       setMessage("");
       setDraftInfo(null);
       setSelected(new Set());
@@ -95,13 +97,12 @@ export default function ProjectChangesPage() {
           <Badge>{p.branch ?? "브랜치 없음"}</Badge>
         </div>
         <div className="text-xs text-zinc-500 [overflow-wrap:anywhere]">{p.path}</div>
+        <div className="mt-2">
+          <PushBar project={p} onPushed={project.reload} />
+        </div>
       </div>
 
-      {committed && (
-        <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300">
-          파일 {committed.count}개를 커밋했습니다 <code className="font-mono">{committed.sha.slice(0, 7)}</code>. push는 하지 않았습니다.
-        </div>
-      )}
+      {committed && <PushOutcome result={committed} sha={committed.sha} />}
 
       {changes.error && <ErrorBox action message={changes.error} />}
 
@@ -170,9 +171,21 @@ export default function ProjectChangesPage() {
             />
             {formError && <p className="text-sm text-red-600 dark:text-red-400">{formError}</p>}
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <span className="mr-auto text-xs text-zinc-500">고른 파일만 이 PC의 git 설정으로 커밋합니다. push는 하지 않습니다.</span>
+              <span className="mr-auto text-xs text-zinc-500">고른 파일만 이 PC의 git 설정으로 커밋합니다.</span>
+              {p.has_remote ? (
+                <label className="flex items-center gap-1.5 text-sm text-zinc-700 dark:text-zinc-300">
+                  <input type="checkbox" checked={pushAfter} onChange={(e) => setPushAfter(e.target.checked)} />
+                  커밋 후 바로 push
+                </label>
+              ) : (
+                <span className="text-xs text-zinc-500">원격 저장소가 없어 push는 하지 않습니다</span>
+              )}
               <Button variant="primary" onClick={doCommit} disabled={committing || drafting}>
-                {committing ? "커밋하는 중…" : `승인하고 커밋 (${selected.size}개 파일)`}
+                {committing
+                  ? pushAfter && p.has_remote
+                    ? "커밋하고 push하는 중…"
+                    : "커밋하는 중…"
+                  : `승인하고 ${pushAfter && p.has_remote ? "커밋·push" : "커밋"} (${selected.size}개 파일)`}
               </Button>
             </div>
           </div>

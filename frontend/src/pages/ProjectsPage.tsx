@@ -78,7 +78,19 @@ export default function ProjectsPage() {
                       </Link>
                       <div className="text-xs text-zinc-500">{p.path}</div>
                     </td>
-                    <td className="py-2 pr-3"><Badge>{p.branch ?? "—"}</Badge></td>
+                    <td className="py-2 pr-3">
+                      <Badge>{p.branch ?? "—"}</Badge>
+                      {p.ahead > 0 && (
+                        <span className="ml-1" title="push 안 된 커밋">
+                          <Badge tone="blue">↑{p.ahead}</Badge>
+                        </span>
+                      )}
+                      {p.behind > 0 && (
+                        <span className="ml-1" title="원격에만 있는 커밋 (pull 필요)">
+                          <Badge tone="amber">↓{p.behind}</Badge>
+                        </span>
+                      )}
+                    </td>
                     <td className="py-2 text-right tabular-nums">
                       {p.dirty_files > 0 ? (
                         <Link to={`/projects/${p.id}/changes`} className="hover:opacity-80" title="변경 내용 보고 커밋하기">

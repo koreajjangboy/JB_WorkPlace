@@ -1,18 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
-import { reviewApi, type TaskDetail } from "../api";
+import { api, reviewApi, type PushResult, type TaskDetail } from "../api";
 import { FileRow } from "../changes";
 import { Button, Card, Empty, ErrorBox } from "../components";
 import { dateTime } from "../format";
+import { PushBar, PushOutcome } from "../push";
 import { useAsync } from "../useAsync";
-
 
 export default function ReviewCard({ task, onChanged }: { task: TaskDetail; onChanged: () => void }) {
   const { data, error, loading, reload } = useAsync(() => reviewApi.changes(task.id), [task.id, task.updated_at]);
+  const project = useAsync(() => api.project(task.project_id), [task.project_id, task.updated_at]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState<"commit" | "complete" | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [pushAfter, setPushAfter] = useState(true);
+  const [lastCommit, setLastCommit] = useState<(PushResult & { sha: string }) | null>(null);
+  const hasRemote = !!project.data?.has_remote;
 
   // 기본 선택: 이 작업에서 새로 바뀐 파일만. 작업 전부터 바뀌어 있던 파일은 직접 고르게 한다.
   useEffect(() => {
@@ -40,8 +44,10 @@ export default function ReviewCard({ task, onChanged }: { task: TaskDetail; onCh
     setBusy("commit");
     setFormError(null);
     try {
-      await reviewApi.commit(task.id, message, [...selected]);
+      const res = await reviewApi.commit(task.id, message, [...selected], pushAfter && hasRemote);
+      setLastCommit(res);
       reload();
+      project.reload();
       onChanged();
     } catch (e) {
       setFormError((e as Error).message);
@@ -76,10 +82,17 @@ export default function ReviewCard({ task, onChanged }: { task: TaskDetail; onCh
       {loading && !data && <p className="text-sm text-zinc-500">변경 사항을 읽는 중…</p>}
       {data && (
         <div className="space-y-3">
-          {data.commit_sha && (
-            <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300">
-              커밋함 <code className="font-mono">{data.commit_sha.slice(0, 7)}</code> · {dateTime(data.committed_at)}
-            </div>
+          {lastCommit ? (
+            <PushOutcome result={lastCommit} sha={lastCommit.sha} />
+          ) : (
+            data.commit_sha && (
+              <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300">
+                커밋함 <code className="font-mono">{data.commit_sha.slice(0, 7)}</code> · {dateTime(data.committed_at)}
+              </div>
+            )
+          )}
+          {data.commit_sha && project.data && project.data.has_remote && (project.data.ahead > 0 || !project.data.upstream) && (
+            <PushBar project={project.data} onPushed={project.reload} />
           )}
           {!data.tracked && files.length > 0 && (
             <p className="text-xs text-amber-700 dark:text-amber-400">
@@ -154,7 +167,13 @@ export default function ReviewCard({ task, onChanged }: { task: TaskDetail; onCh
           {formError && <p className="text-sm text-red-600 dark:text-red-400">{formError}</p>}
 
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <span className="mr-auto text-xs text-zinc-500">커밋은 이 PC의 git 설정(이름, 이메일)으로 합니다. push는 하지 않습니다.</span>
+            <span className="mr-auto text-xs text-zinc-500">커밋은 이 PC의 git 설정(이름, 이메일)으로 합니다.</span>
+            {files.length > 0 && hasRemote && (
+              <label className="flex items-center gap-1.5 text-sm text-zinc-700 dark:text-zinc-300">
+                <input type="checkbox" checked={pushAfter} onChange={(e) => setPushAfter(e.target.checked)} />
+                커밋 후 바로 push
+              </label>
+            )}
             {task.status !== "done" && (
               <Button onClick={doComplete} disabled={busy !== null}>
                 {busy === "complete" ? "처리 중…" : "커밋 없이 완료"}
@@ -162,7 +181,11 @@ export default function ReviewCard({ task, onChanged }: { task: TaskDetail; onCh
             )}
             {files.length > 0 && (
               <Button variant="primary" onClick={doCommit} disabled={busy !== null}>
-                {busy === "commit" ? "커밋하는 중…" : `승인하고 커밋 (${selected.size}개 파일)`}
+                {busy === "commit"
+                  ? pushAfter && hasRemote
+                    ? "커밋하고 push하는 중…"
+                    : "커밋하는 중…"
+                  : `승인하고 ${pushAfter && hasRemote ? "커밋·push" : "커밋"} (${selected.size}개 파일)`}
               </Button>
             )}
           </div>

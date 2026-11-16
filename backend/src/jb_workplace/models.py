@@ -23,6 +23,10 @@ class Project(SQLModel, table=True):
     last_commit_at: datetime | None = _ts(default=None)
     last_activity_at: datetime | None = _ts(default=None, index=True)  # 마지막 커밋과 마지막 세션 중 늦은 시각
     exists: bool = True  # 다음 스캔에서 사라졌으면 False
+    upstream: str | None = None  # 연결된 원격 브랜치 (예: origin/main)
+    ahead: int = 0  # push 안 된 커밋 수
+    behind: int = 0  # 원격에만 있는 커밋 수 (마지막 fetch 기준)
+    has_remote: bool = False
     scanned_at: datetime = _ts()
 
 

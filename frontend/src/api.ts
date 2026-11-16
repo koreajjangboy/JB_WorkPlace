@@ -6,11 +6,17 @@ export type Project = {
   dirty_files: number;
   last_commit_at: string | null;
   last_activity_at: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  has_remote: boolean;
   session_count: number;
   last_session_at: string | null;
   input_tokens: number;
   output_tokens: number;
 };
+
+export type PushResult = { pushed: boolean; push_output: string | null; push_error: string | null };
 
 export type SessionSummary = {
   id: string;
@@ -204,8 +210,8 @@ export const reviewApi = {
   changes: (taskId: number) => request<Changes>(`/api/tasks/${taskId}/changes`),
   diff: (taskId: number, path: string) =>
     request<{ path: string; diff: string }>(`/api/tasks/${taskId}/diff?path=${encodeURIComponent(path)}`),
-  commit: (taskId: number, message: string, files: string[]) =>
-    request<Task>(`/api/tasks/${taskId}/commit`, json({ message, files })),
+  commit: (taskId: number, message: string, files: string[], push = false) =>
+    request<PushResult & { task: Task; sha: string }>(`/api/tasks/${taskId}/commit`, json({ message, files, push })),
   complete: (taskId: number) => request<Task>(`/api/tasks/${taskId}/complete`, { method: "POST" }),
 };
 
@@ -217,6 +223,10 @@ export const projectChangesApi = {
     request<{ path: string; diff: string }>(`/api/projects/${projectId}/diff?path=${encodeURIComponent(path)}`),
   draftMessage: (projectId: number, files: string[]) =>
     request<{ message: string; cost_usd: number | null }>(`/api/projects/${projectId}/commit-message`, json({ files })),
-  commit: (projectId: number, files: string[], message: string) =>
-    request<{ sha: string }>(`/api/projects/${projectId}/commit`, json({ files, message })),
+  commit: (projectId: number, files: string[], message: string, push = false) =>
+    request<PushResult & { sha: string }>(`/api/projects/${projectId}/commit`, json({ files, message, push })),
+  push: (projectId: number) =>
+    request<PushResult & { ahead: number; behind: number; upstream: string | null }>(`/api/projects/${projectId}/push`, {
+      method: "POST",
+    }),
 };

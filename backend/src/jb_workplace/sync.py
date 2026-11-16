@@ -73,6 +73,7 @@ def _sync_projects(db: Session) -> list[Project]:
         project.name = repo.name
         project.branch = repo.branch
         project.dirty_files = repo.dirty_files
+        project.upstream, project.ahead, project.behind, project.has_remote = repo.upstream, repo.ahead, repo.behind, repo.has_remote
         project.last_commit_at = _as_utc(repo.last_commit_at)
         project.exists = True
         project.scanned_at = now
@@ -233,6 +234,7 @@ def refresh_project(project_id: int) -> None:
         info = _read_repo(Path(project.path))
         project.branch = info.branch
         project.dirty_files = info.dirty_files
+        project.upstream, project.ahead, project.behind, project.has_remote = info.upstream, info.ahead, info.behind, info.has_remote
         project.last_commit_at = _as_utc(info.last_commit_at)
         if project.last_commit_at and (project.last_activity_at is None or project.last_commit_at > project.last_activity_at):
             project.last_activity_at = project.last_commit_at

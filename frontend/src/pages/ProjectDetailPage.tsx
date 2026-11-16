@@ -2,12 +2,13 @@ import { Link, useParams } from "react-router";
 import { api, taskApi } from "../api";
 import { Badge, Card, Empty, ErrorBox, Loading, SessionRow, Stat } from "../components";
 import { dateTime, relativeTime, tokens, usd } from "../format";
+import { PushBar } from "../push";
 import { useAsync } from "../useAsync";
 import { TaskRow } from "./TasksPage";
 
 export default function ProjectDetailPage() {
   const id = Number(useParams().projectId);
-  const { data, error, loading } = useAsync(
+  const { data, error, loading, reload } = useAsync(
     () => Promise.all([api.project(id), api.sessions({ projectId: id, limit: 500 }), taskApi.list({ projectId: id })]),
     [id],
   );
@@ -42,6 +43,9 @@ export default function ProjectDetailPage() {
         </div>
         <div className="text-xs text-zinc-500 [overflow-wrap:anywhere]">
           {project.path} · 마지막 커밋 {dateTime(project.last_commit_at)}
+        </div>
+        <div className="mt-2">
+          <PushBar project={project} onPushed={reload} />
         </div>
       </div>
 

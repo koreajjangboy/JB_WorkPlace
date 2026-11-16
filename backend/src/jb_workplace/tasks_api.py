@@ -13,6 +13,8 @@ from .config import get_settings
 from .db import engine, get_session
 from .models import Project, Run, RunEvent, Task
 from .gitops import GitError, as_dict, commit, file_diff, task_changes
+from .gitops import push as git_push
+from .sync import refresh_project
 from .runner import RunnerError, make_title, running_count, start_run, stop_run
 
 router = APIRouter(prefix="/api")
@@ -338,6 +340,7 @@ class ChangesOut(BaseModel):
 class CommitIn(BaseModel):
     message: str = Field(min_length=1, max_length=10000)
     files: list[str] = Field(min_length=1, max_length=2000)
+    push: bool = False
 
 
 def _project_repo(db: Session, task: Task) -> str:
@@ -376,8 +379,8 @@ def get_diff(task_id: int, path: str, db: Session = Depends(get_session)) -> dic
     return {"path": path, "diff": file_diff(_project_repo(db, task), path, match.status)}
 
 
-@router.post("/tasks/{task_id}/commit", response_model=TaskOut)
-def commit_task(task_id: int, body: CommitIn, db: Session = Depends(get_session)) -> TaskOut:
+@router.post("/tasks/{task_id}/commit")
+def commit_task(task_id: int, body: CommitIn, db: Session = Depends(get_session)) -> dict:
     task = _get_task(db, task_id)
     if task.status == "running":
         raise HTTPException(409, "실행 중에는 커밋할 수 없습니다")
@@ -398,7 +401,14 @@ def commit_task(task_id: int, body: CommitIn, db: Session = Depends(get_session)
     db.add(task)
     db.commit()
     db.refresh(task)
-    return _task_outs(db, [task])[0]
+    result: dict[str, Any] = {"pushed": False, "push_output": None, "push_error": None}
+    if body.push:
+        try:
+            result.update(pushed=True, push_output=git_push(_project_repo(db, task)))
+        except GitError as exc:
+            result.update(push_error=str(exc))
+    refresh_project(task.project_id)
+    return {"task": _task_outs(db, [task])[0].model_dump(mode="json"), "sha": sha, **result}
 
 
 @router.post("/tasks/{task_id}/complete", response_model=TaskOut)

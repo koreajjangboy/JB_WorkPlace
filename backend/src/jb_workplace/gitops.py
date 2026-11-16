@@ -191,5 +191,50 @@ def commit(repo: str, files: list[str], message: str) -> str:
     return _git(repo, "rev-parse", "HEAD").strip()
 
 
+PUSH_TIMEOUT = 120
+
+
+def push(repo: str) -> str:
+    """지금 브랜치를 원격에 올린다. 강제 push는 하지 않는다.
+
+    연결된 원격 브랜치가 없으면 origin 에 같은 이름으로 올리고 연결한다 (-u).
+    인증 창을 띄우거나 비밀번호를 묻지 않는다 (GIT_TERMINAL_PROMPT=0).
+    """
+    branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    if not branch or branch == "HEAD":
+        raise GitError("브랜치가 아닌 상태(detached HEAD)라 push할 수 없습니다")
+    upstream = _git(repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", check=False).strip()
+    if upstream:
+        args = ["push"]
+    else:
+        remotes = _git(repo, "remote").split()
+        if "origin" not in remotes:
+            raise GitError("원격 저장소(origin)가 없습니다. GitHub 저장소를 먼저 연결하세요.")
+        args = ["push", "-u", "origin", branch]
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo, *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=PUSH_TIMEOUT,
+            env=env,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GitError(f"{PUSH_TIMEOUT}초 안에 끝나지 않았습니다. 네트워크나 인증 상태를 확인하세요.") from exc
+    output = ((result.stdout or "") + (result.stderr or "")).strip()
+    if result.returncode != 0:
+        lower = output.lower()
+        if "rejected" in lower and ("fetch first" in lower or "non-fast-forward" in lower):
+            raise GitError("원격에 내 PC에 없는 커밋이 있어 push가 거부됐습니다. 터미널에서 git pull 후 다시 시도하세요.\n" + output)
+        if "authentication" in lower or "could not read username" in lower or "permission denied" in lower or "403" in lower:
+            raise GitError("인증이 필요합니다. 터미널에서 한 번 직접 git push 해서 로그인해 두세요.\n" + output)
+        raise GitError(output or f"git push 실패 (종료 코드 {result.returncode})")
+    return output
+
+
 def as_dict(change: FileChange) -> dict:
     return asdict(change)

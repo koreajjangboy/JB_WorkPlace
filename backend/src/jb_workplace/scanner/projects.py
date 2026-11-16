@@ -16,6 +16,10 @@ class RepoInfo:
     branch: str | None
     dirty_files: int
     last_commit_at: datetime | None
+    upstream: str | None = None
+    ahead: int = 0
+    behind: int = 0
+    has_remote: bool = False
 
 
 def _git(repo: Path, *args: str) -> str | None:
@@ -45,12 +49,25 @@ def _read_repo(repo: Path) -> RepoInfo:
             last_commit_at = datetime.fromisoformat(last.strip())
         except ValueError:
             pass
+    upstream = _git(repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    upstream = upstream.strip() if upstream else None
+    ahead = behind = 0
+    if upstream:
+        # 원격 정보는 마지막 fetch 기준이다 (스캔할 때 네트워크에 접속하지 않는다).
+        counts = _git(repo, "rev-list", "--left-right", "--count", "@{u}...HEAD")
+        if counts and len(counts.split()) == 2:
+            behind, ahead = (int(x) for x in counts.split())
+    remotes = _git(repo, "remote")
     return RepoInfo(
         name=repo.name,
         path=str(repo),
         branch=branch.strip() if branch else None,
         dirty_files=len([l for l in status.splitlines() if l.strip()]) if status else 0,
         last_commit_at=last_commit_at,
+        upstream=upstream,
+        ahead=ahead,
+        behind=behind,
+        has_remote=bool(remotes and remotes.strip()),
     )
 
 

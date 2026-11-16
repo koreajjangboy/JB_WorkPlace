@@ -23,6 +23,10 @@ class ProjectOut(BaseModel):
     dirty_files: int
     last_commit_at: datetime | None
     last_activity_at: datetime | None
+    upstream: str | None
+    ahead: int
+    behind: int
+    has_remote: bool
     session_count: int
     last_session_at: datetime | None
     input_tokens: int
