@@ -129,3 +129,52 @@ class RateLimitSnapshot(SQLModel, table=True):
     seven_day_utilization: float | None = None
     seven_day_resets_at: datetime | None = _ts(default=None)
     overage_status: str | None = None
+
+
+class Provider(SQLModel, table=True):
+    """AI 서비스 제공자. 고정 목록이 아니라, 처음 기록이 들어오면 자동으로 추가된다."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    name: str = Field(unique=True)  # 소문자 식별자 (예: claude, gemini, runway)
+    display_name: str | None = None
+    kind: str = "text"  # text | image | video | audio | embedding | mixed
+    color: str | None = None
+    created_at: datetime = _ts()
+
+
+class UsageRecord(SQLModel, table=True):
+    """사용량 한 건. 단위는 provider마다 다르고(토큰, 문자, 크레딧, 초 …) 비용은 단가표로 계산한다."""
+
+    __tablename__ = "usage_record"
+
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
+    provider_id: int = Field(foreign_key="provider.id")
+    model: str | None = None
+    project_id: int | None = Field(default=None, foreign_key="project.id")
+    project_name: str | None = None  # 프로젝트로 연결되지 않은 기록용 이름
+    ts: datetime = _ts()
+    kind: str = "text"
+    unit: str  # token | char | credit | second | image | request | …
+    quantity: float = 0
+    input_tokens: int = Field(default=0, sa_type=BigInteger)
+    output_tokens: int = Field(default=0, sa_type=BigInteger)
+    cache_write_tokens: int = Field(default=0, sa_type=BigInteger)
+    cache_read_tokens: int = Field(default=0, sa_type=BigInteger)
+    cost_usd: float | None = None  # 출처가 알려준 실제 비용 (없으면 단가표로 계산)
+    source: str  # session_log | app | commit_draft
+    source_ref: str | None = Field(default=None, unique=True)  # 같은 기록을 다시 넣지 않기 위한 키
+    meta: dict[str, Any] | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+
+
+class PriceRule(SQLModel, table=True):
+    """단가표. model 이 비어 있으면 그 provider의 모든 모델에 적용된다."""
+
+    __tablename__ = "price_rule"
+
+    id: int | None = Field(default=None, primary_key=True)
+    provider_id: int = Field(foreign_key="provider.id")
+    model: str | None = None
+    unit: str  # input_token | output_token | cache_write_token | cache_read_token | char | credit | …
+    price_per_unit: float  # USD / 1 단위
+    valid_from: datetime = _ts()
+    note: str | None = None

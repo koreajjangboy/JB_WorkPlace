@@ -14,9 +14,11 @@ from .db import engine
 from .models import ClaudeSession, Project
 from .scanner.projects import scan_repos
 from .scanner.sessions import list_session_files, summarize_session
+from .usage import sync_claude_usage
 
 log = logging.getLogger(__name__)
 _lock = threading.Lock()
+_changed_sessions: set[str] = set()
 
 
 @dataclass
@@ -94,6 +96,7 @@ def _sync_sessions(db: Session, projects: list[Project]) -> tuple[int, int, int]
     stored = {s.file_path: s for s in db.exec(select(ClaudeSession)).all()}
     seen_files: set[str] = set()
     updated = 0
+    _changed_sessions.clear()
 
     for path in files:
         key = str(path)
@@ -135,6 +138,7 @@ def _sync_sessions(db: Session, projects: list[Project]) -> tuple[int, int, int]
             row.cache_read_tokens = summary.cache_read_tokens
             row.cost_usd = summary.cost_usd
             updated += 1
+            _changed_sessions.add(row.id)
         # 프로젝트 목록이 바뀌었을 수 있으니 연결은 매번 다시 계산한다.
         row.project_id = _match_project(row.cwd, projects)
         db.add(row)
@@ -212,6 +216,13 @@ def run_scan() -> ScanResult:
         projects = _promote_session_folders(db, projects)
         unmatched = len(db.exec(select(ClaudeSession.id).where(ClaudeSession.project_id == None)).all())  # noqa: E711
         _update_activity(db, projects)
+        try:
+            records = sync_claude_usage(db, set(_changed_sessions))
+            if records:
+                log.info("Claude 사용량 기록 %d건 갱신", records)
+        except Exception:
+            db.rollback()
+            log.exception("Claude 사용량 수집 실패")
         _last_result = ScanResult(
             projects=len(projects),
             sessions=total,
