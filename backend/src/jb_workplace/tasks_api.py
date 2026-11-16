@@ -12,6 +12,7 @@ from sqlmodel import Session, select
 from .config import get_settings
 from .db import engine, get_session
 from .models import Project, Run, RunEvent, Task
+from .gitops import GitError, as_dict, commit, file_diff, task_changes
 from .runner import RunnerError, make_title, running_count, start_run, stop_run
 
 router = APIRouter(prefix="/api")
@@ -53,6 +54,9 @@ class TaskOut(BaseModel):
     run_count: int
     total_cost_usd: float | None
     last_run: RunOut | None
+    commit_message: str | None
+    commit_sha: str | None
+    committed_at: datetime | None
 
 
 class TaskDetail(TaskOut):
@@ -307,3 +311,103 @@ async def run_stream(run_id: int, request: Request, after: int = -1) -> Streamin
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ---------------------------------------------------------------- 검토: 변경 파일, diff, 커밋
+
+
+class FileChangeOut(BaseModel):
+    path: str
+    status: str
+    kind: str
+    pre_existing: bool
+    additions: int | None
+    deletions: int | None
+
+
+class ChangesOut(BaseModel):
+    tracked: bool  # 첫 실행 전 상태를 기록해 둔 작업인지 (아니면 어떤 파일을 Claude가 바꿨는지 모름)
+    files: list[FileChangeOut]
+    commit_message: str | None
+    commit_sha: str | None
+    committed_at: datetime | None
+
+
+class CommitIn(BaseModel):
+    message: str = Field(min_length=1, max_length=10000)
+    files: list[str] = Field(min_length=1, max_length=2000)
+
+
+def _project_repo(db: Session, task: Task) -> str:
+    project = db.get(Project, task.project_id)
+    if project is None or not project.exists:
+        raise HTTPException(409, "프로젝트 폴더가 없습니다")
+    return project.path
+
+
+def _changes(db: Session, task: Task) -> list:
+    try:
+        return task_changes(_project_repo(db, task), task.baseline)
+    except GitError as exc:
+        raise HTTPException(409, f"변경 사항을 읽지 못했습니다: {exc}") from exc
+
+
+@router.get("/tasks/{task_id}/changes", response_model=ChangesOut)
+def get_changes(task_id: int, db: Session = Depends(get_session)) -> ChangesOut:
+    task = _get_task(db, task_id)
+    files = _changes(db, task)
+    return ChangesOut(
+        tracked=task.baseline is not None,
+        files=[FileChangeOut(**as_dict(f)) for f in files],
+        commit_message=task.commit_message,
+        commit_sha=task.commit_sha,
+        committed_at=task.committed_at,
+    )
+
+
+@router.get("/tasks/{task_id}/diff")
+def get_diff(task_id: int, path: str, db: Session = Depends(get_session)) -> dict:
+    task = _get_task(db, task_id)
+    match = next((f for f in _changes(db, task) if f.path == path), None)
+    if match is None:
+        raise HTTPException(404, "이 작업의 변경 파일이 아닙니다")
+    return {"path": path, "diff": file_diff(_project_repo(db, task), path, match.status)}
+
+
+@router.post("/tasks/{task_id}/commit", response_model=TaskOut)
+def commit_task(task_id: int, body: CommitIn, db: Session = Depends(get_session)) -> TaskOut:
+    task = _get_task(db, task_id)
+    if task.status == "running":
+        raise HTTPException(409, "실행 중에는 커밋할 수 없습니다")
+    allowed = {f.path for f in _changes(db, task)}
+    unknown = [p for p in body.files if p not in allowed]
+    if unknown:
+        raise HTTPException(400, f"이 작업의 변경 파일이 아닌 항목이 있습니다: {', '.join(unknown[:5])}")
+    try:
+        sha = commit(_project_repo(db, task), body.files, body.message)
+    except GitError as exc:
+        raise HTTPException(409, f"커밋하지 못했습니다: {exc}") from exc
+    now = datetime.now(UTC)
+    task.commit_message = body.message.strip()
+    task.commit_sha = sha
+    task.committed_at = now
+    task.status = "done"
+    task.updated_at = now
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return _task_outs(db, [task])[0]
+
+
+@router.post("/tasks/{task_id}/complete", response_model=TaskOut)
+def complete_task(task_id: int, db: Session = Depends(get_session)) -> TaskOut:
+    """커밋하지 않고 완료로 표시한다 (직접 커밋했거나, 바꾼 파일이 없는 작업)."""
+    task = _get_task(db, task_id)
+    if task.status == "running":
+        raise HTTPException(409, "실행 중인 작업입니다")
+    task.status = "done"
+    task.updated_at = datetime.now(UTC)
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return _task_outs(db, [task])[0]

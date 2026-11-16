@@ -9,6 +9,7 @@
 """
 
 import json
+import re
 import logging
 import os
 import subprocess
@@ -23,6 +24,7 @@ from sqlmodel import Session, select
 
 from .config import get_settings
 from .db import engine
+from .gitops import GitError, snapshot
 from .models import Project, Run, RunEvent, Task
 from .scanner.sessions import TOOL_INPUT_LIMIT, TOOL_RESULT_LIMIT, TEXT_LIMIT, _text_of, _truncate
 
@@ -33,6 +35,21 @@ _procs: dict[int, subprocess.Popen] = {}
 _kill_reasons: dict[int, str] = {}  # run_id -> "stopped" | "timeout"
 
 MAX_STDERR_EVENTS = 50
+
+# 커밋은 사람이 승인한 뒤 WorkPlace가 하므로, Claude에게는 메시지 초안만 남기게 한다.
+COMMIT_HINT = (
+    "You are running inside JB WorkPlace. You cannot run git add, git commit or git push; "
+    "the user reviews the diff and WorkPlace commits after approval. "
+    "If you changed any files, end your final message with a suggested commit message in a fenced "
+    "code block whose language is `commit` (```commit ... ```). Match the repository's existing "
+    "commit message style (check `git log` if needed). Do not include a Co-Authored-By line."
+)
+_COMMIT_BLOCK = re.compile(r"```commit[^\n]*\n(.*?)```", re.DOTALL)
+
+
+def extract_commit_message(text: str) -> str | None:
+    blocks = _COMMIT_BLOCK.findall(text or "")
+    return blocks[-1].strip() or None if blocks else None
 
 
 class RunnerError(Exception):
@@ -69,6 +86,7 @@ def _build_args(exe: str, task: Task, resume: str | None) -> list[str]:
         "--disallowedTools", s.runner_disallowed_tools,
         "--max-budget-usd", f"{s.runner_max_budget_usd:g}",
         "--name", f"WorkPlace #{task.id}: {task.title}"[:120],
+        "--append-system-prompt", COMMIT_HINT,
     ]
     if s.runner_model:
         args += ["--model", s.runner_model]
@@ -106,6 +124,13 @@ def start_run(task_id: int, prompt: str | None = None) -> Run:
             text = (prompt or "").strip() or (task.prompt if resume is None else "")
             if not text:
                 raise RunnerError("지시 내용을 입력하세요")
+
+            if task.baseline is None:
+                # 첫 실행 직전의 변경 상태를 기록해 두고, 나중에 이 작업이 바꾼 파일만 가려낸다.
+                try:
+                    task.baseline = snapshot(project.path)
+                except GitError as exc:
+                    log.info("변경 추적 기준을 만들지 못함 (task %s): %s", task.id, exc)
 
             run = Run(task_id=task.id, prompt=text, status="running", started_at=_now(), resumed_from=resume)
             task.status = "running"
@@ -342,7 +367,14 @@ def _watch(run_id: int, proc: subprocess.Popen, prompt: str) -> None:
         status, error = "succeeded", None
     if error:
         writer.add("error", {"text": error})
-    _finish(run_id, status=status, error=error, exit_code=code, session_id=state.get("session_id"))
+    _finish(
+        run_id,
+        status=status,
+        error=error,
+        exit_code=code,
+        session_id=state.get("session_id"),
+        commit_message=extract_commit_message(str((result or {}).get("result") or "")),
+    )
 
     # 이번 실행의 세션 기록도 색인하도록 스캔을 한 번 돌린다.
     from .sync import run_scan
@@ -358,7 +390,7 @@ def _safe_scan(run_scan) -> None:
 
 
 def _finish(run_id: int, *, status: str, error: str | None, exit_code: int | None = None,
-            session_id: str | None = None) -> None:
+            session_id: str | None = None, commit_message: str | None = None) -> None:
     with Session(engine) as db:
         run = db.get(Run, run_id)
         run.status = status
@@ -369,6 +401,8 @@ def _finish(run_id: int, *, status: str, error: str | None, exit_code: int | Non
             run.session_id = session_id
         task = db.get(Task, run.task_id)
         task.status = "review" if status == "succeeded" else "failed"
+        if commit_message:
+            task.commit_message = commit_message
         if run.session_id:
             task.session_id = run.session_id
         task.updated_at = _now()

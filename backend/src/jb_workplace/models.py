@@ -62,6 +62,11 @@ class Task(SQLModel, table=True):
     session_id: str | None = None  # 다시 지시할 때 이어 갈 Claude 세션
     created_at: datetime = _ts()
     updated_at: datetime = _ts(index=True)
+    # 첫 실행 직전의 저장 안 된 변경 {경로: {"status", "hash"}}. 이 작업이 바꾼 파일을 가려내는 기준.
+    baseline: dict[str, Any] | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    commit_message: str | None = None  # Claude가 제안한 커밋 메시지 (사람이 고칠 수 있음)
+    commit_sha: str | None = None
+    committed_at: datetime | None = _ts(default=None)
 
 
 class Run(SQLModel, table=True):

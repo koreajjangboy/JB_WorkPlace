@@ -4,6 +4,7 @@ import { taskApi, type Run, type RunEvent } from "../api";
 import { Badge, Button, Card, ErrorBox, Loading, StatusBadge } from "../components";
 import { dateTime, duration, tokens, usd } from "../format";
 import { useAsync } from "../useAsync";
+import ReviewCard from "./ReviewCard";
 
 function clock(iso: string) {
   return new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -268,6 +269,8 @@ export default function TaskDetailPage() {
       {task.runs.map((r, i) => (
         <RunView key={r.id} run={r} index={i} onChange={reload} />
       ))}
+
+      {!neverRun && !running && <ReviewCard task={task} onChanged={reload} />}
 
       {!neverRun && (
         <Card title="추가 지시">

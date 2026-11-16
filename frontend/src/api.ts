@@ -121,6 +121,9 @@ export type Task = {
   run_count: number;
   total_cost_usd: number | null;
   last_run: Run | null;
+  commit_message: string | null;
+  commit_sha: string | null;
+  committed_at: string | null;
 };
 
 export type TaskDetail = Task & {
@@ -174,4 +177,32 @@ export const taskApi = {
   stop: (runId: number) => request<{ ok: boolean }>(`/api/runs/${runId}/stop`, { method: "POST" }),
   events: (runId: number) => request<RunEvent[]>(`/api/runs/${runId}/events`),
   streamUrl: (runId: number, after = -1) => `/api/runs/${runId}/stream?after=${after}`,
+};
+
+// ---------------------------------------------------------------- 검토: 변경 파일, diff, 커밋
+
+export type FileChange = {
+  path: string;
+  status: string;
+  kind: "added" | "modified" | "deleted" | "renamed";
+  pre_existing: boolean;
+  additions: number | null;
+  deletions: number | null;
+};
+
+export type Changes = {
+  tracked: boolean;
+  files: FileChange[];
+  commit_message: string | null;
+  commit_sha: string | null;
+  committed_at: string | null;
+};
+
+export const reviewApi = {
+  changes: (taskId: number) => request<Changes>(`/api/tasks/${taskId}/changes`),
+  diff: (taskId: number, path: string) =>
+    request<{ path: string; diff: string }>(`/api/tasks/${taskId}/diff?path=${encodeURIComponent(path)}`),
+  commit: (taskId: number, message: string, files: string[]) =>
+    request<Task>(`/api/tasks/${taskId}/commit`, json({ message, files })),
+  complete: (taskId: number) => request<Task>(`/api/tasks/${taskId}/complete`, { method: "POST" }),
 };
