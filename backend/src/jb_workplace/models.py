@@ -1,6 +1,9 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime
+from typing import Any
+
+from sqlalchemy import BigInteger, Column, DateTime
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
 
@@ -46,3 +49,52 @@ class ClaudeSession(SQLModel, table=True):
     cache_creation_tokens: int = Field(default=0, sa_type=BigInteger)
     cache_read_tokens: int = Field(default=0, sa_type=BigInteger)
     cost_usd: float | None = None  # 기록에 비용 정보가 있을 때만
+
+
+class Task(SQLModel, table=True):
+    """사람이 내린 작업 하나. 실행(Run)이 여러 번 붙을 수 있다."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    project_id: int = Field(foreign_key="project.id", index=True)
+    title: str
+    prompt: str
+    status: str = Field(default="todo", index=True)  # todo | running | review | done | failed
+    session_id: str | None = None  # 다시 지시할 때 이어 갈 Claude 세션
+    created_at: datetime = _ts()
+    updated_at: datetime = _ts(index=True)
+
+
+class Run(SQLModel, table=True):
+    """Claude Code 실행 1회."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    task_id: int = Field(foreign_key="task.id", index=True)
+    prompt: str
+    status: str = Field(default="running", index=True)  # running | succeeded | failed | stopped
+    session_id: str | None = None
+    resumed_from: str | None = None  # --resume 로 이어 간 세션
+    pid: int | None = None
+    started_at: datetime = _ts()
+    ended_at: datetime | None = _ts(default=None)
+    exit_code: int | None = None
+    error: str | None = None
+    model: str | None = None
+    num_turns: int | None = None
+    input_tokens: int = Field(default=0, sa_type=BigInteger)
+    output_tokens: int = Field(default=0, sa_type=BigInteger)
+    cache_creation_tokens: int = Field(default=0, sa_type=BigInteger)
+    cache_read_tokens: int = Field(default=0, sa_type=BigInteger)
+    cost_usd: float | None = None
+
+
+class RunEvent(SQLModel, table=True):
+    """실행 중 일어난 일 한 건 (메시지, 도구 호출, 도구 결과, 오류 등)."""
+
+    __tablename__ = "run_event"
+
+    id: int | None = Field(default=None, primary_key=True, sa_type=BigInteger)
+    run_id: int = Field(foreign_key="run.id", index=True)
+    seq: int
+    ts: datetime = _ts()
+    kind: str  # init | text | tool_use | tool_result | result | error | stderr
+    payload: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB, nullable=False))

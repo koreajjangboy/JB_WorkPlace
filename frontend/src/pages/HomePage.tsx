@@ -1,21 +1,29 @@
 import { Link } from "react-router";
-import { api } from "../api";
+import { api, taskApi } from "../api";
 import { Card, Empty, ErrorBox, Loading, SessionRow, Stat } from "../components";
 import { relativeTime, tokens } from "../format";
 import { useAsync } from "../useAsync";
+import { TaskRow } from "./TasksPage";
 
 const WEEK = 7 * 24 * 3600 * 1000;
 
 export default function HomePage() {
   const { data, error, loading } = useAsync(
-    () => Promise.all([api.projects(), api.sessions({ limit: 500 })]),
+    () =>
+      Promise.all([
+        api.projects(),
+        api.sessions({ limit: 500 }),
+        taskApi.list({ status: "running,review,failed" }),
+      ]),
     [],
   );
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBox message={error} />;
   if (!data) return null;
 
-  const [projects, sessions] = data;
+  const [projects, sessions, activeTasks] = data;
+  const runningCount = activeTasks.filter((t) => t.status === "running").length;
+  const reviewCount = activeTasks.filter((t) => t.status === "review").length;
   const weekAgo = Date.now() - WEEK;
   const recent = sessions.filter((s) => s.ended_at && new Date(s.ended_at).getTime() > weekAgo);
   const weekOutput = recent.reduce((sum, s) => sum + s.output_tokens, 0);
@@ -26,10 +34,25 @@ export default function HomePage() {
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="프로젝트" value={projects.length} hint={`Claude 세션 있는 곳 ${projects.filter((p) => p.session_count).length}개`} />
-        <Stat label="최근 7일 세션" value={recent.length} hint={`전체 ${sessions.length}개`} />
-        <Stat label="최근 7일 출력 토큰" value={tokens(weekOutput)} hint="Claude Code 기준" />
+        <Stat label="실행 중 / 리뷰 대기" value={`${runningCount} / ${reviewCount}`} hint={<Link to="/tasks" className="hover:underline">작업 보기</Link>} />
+        <Stat label="최근 7일 출력 토큰" value={tokens(weekOutput)} hint={`세션 ${recent.length}개 · Claude Code 기준`} />
         <Stat label="저장 안 된 변경" value={dirtyTotal} hint="모든 프로젝트 합계 (파일 수)" />
       </div>
+
+      <Card
+        title="주목할 작업"
+        action={
+          <Link to="/tasks/new" className="text-xs text-blue-600 hover:underline dark:text-blue-400">
+            + 새 작업
+          </Link>
+        }
+      >
+        {activeTasks.length === 0 ? (
+          <Empty>실행 중이거나 리뷰를 기다리는 작업이 없습니다.</Empty>
+        ) : (
+          activeTasks.slice(0, 6).map((t) => <TaskRow key={t.id} t={t} />)
+        )}
+      </Card>
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <Card title="최근 세션" action={<span className="text-xs text-zinc-500">모든 프로젝트</span>}>
@@ -63,7 +86,7 @@ export default function HomePage() {
         </Card>
       </div>
       <p className="text-xs text-zinc-500">
-        작업 지시(M2), 리뷰(M3), provider별 사용량 대시보드(M4)는 다음 단계에서 추가됩니다.
+        diff 보기와 승인·되돌리기(M3), provider별 사용량 대시보드(M4)는 다음 단계에서 추가됩니다.
       </p>
     </div>
   );

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { Link } from "react-router";
 import type { SessionSummary } from "./api";
 import { relativeTime, tokens, usd } from "./format";
@@ -31,11 +31,11 @@ export function Loading() {
   return <p className="py-8 text-center text-sm text-zinc-500">불러오는 중…</p>;
 }
 
-export function ErrorBox({ message }: { message: string }) {
+export function ErrorBox({ message, action = false }: { message: string; action?: boolean }) {
   return (
     <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
-      데이터를 불러오지 못했습니다: {message}
-      <div className="mt-1 text-xs opacity-80">백엔드 서버와 PostgreSQL이 켜져 있는지 확인하세요.</div>
+      {action ? message : <>데이터를 불러오지 못했습니다: {message}</>}
+      {!action && <div className="mt-1 text-xs opacity-80">백엔드 서버와 PostgreSQL이 켜져 있는지 확인하세요.</div>}
     </div>
   );
 }
@@ -44,13 +44,55 @@ export function Empty({ children }: { children: ReactNode }) {
   return <p className="py-6 text-center text-sm text-zinc-500">{children}</p>;
 }
 
-export function Badge({ children, tone = "zinc" }: { children: ReactNode; tone?: "zinc" | "amber" | "blue" }) {
+export function Badge({ children, tone = "zinc" }: { children: ReactNode; tone?: "zinc" | "amber" | "blue" | "green" | "red" }) {
   const tones = {
     zinc: "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
     amber: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
     blue: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300",
+    green: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
+    red: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300",
   };
   return <span className={`rounded px-1.5 py-0.5 text-[11px] whitespace-nowrap ${tones[tone]}`}>{children}</span>;
+}
+
+type Tone = "zinc" | "amber" | "blue" | "green" | "red";
+const STATUS: Record<string, [string, Tone]> = {
+  todo: ["할 일", "zinc"],
+  running: ["실행 중", "blue"],
+  review: ["리뷰", "amber"],
+  done: ["완료", "green"],
+  failed: ["실패", "red"],
+  succeeded: ["성공", "green"],
+  stopped: ["중단", "zinc"],
+};
+
+export function StatusBadge({ status }: { status: string }) {
+  const [label, tone] = STATUS[status] ?? [status, "zinc"];
+  return (
+    <Badge tone={tone}>
+      {status === "running" && <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current align-middle" />}
+      {label}
+    </Badge>
+  );
+}
+
+const BUTTON = {
+  primary: "bg-blue-600 text-white hover:bg-blue-700 border-transparent",
+  secondary: "border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800",
+  danger: "border-red-300 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950",
+};
+
+export function Button({
+  variant = "secondary",
+  className = "",
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: keyof typeof BUTTON }) {
+  return (
+    <button
+      {...props}
+      className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50 ${BUTTON[variant]} ${className}`}
+    />
+  );
 }
 
 export function SessionRow({ s, showProject = false }: { s: SessionSummary; showProject?: boolean }) {

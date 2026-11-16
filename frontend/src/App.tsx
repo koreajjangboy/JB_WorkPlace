@@ -56,7 +56,9 @@ export default function App() {
             <NavLink to="/projects" className={navClass}>
               프로젝트
             </NavLink>
-            <Upcoming label="작업 보드" milestone="M2" />
+            <NavLink to="/tasks" className={navClass}>
+              작업
+            </NavLink>
             <Upcoming label="사용량" milestone="M4" />
           </nav>
           <div className="ml-auto flex items-center gap-3 text-xs text-zinc-500">
@@ -72,6 +74,12 @@ export default function App() {
             >
               {scanning ? "스캔 중…" : "다시 스캔"}
             </button>
+            <NavLink
+              to="/tasks/new"
+              className="inline-flex h-7 items-center rounded-md bg-blue-600 px-2.5 text-xs text-white hover:bg-blue-700"
+            >
+              + 새 작업
+            </NavLink>
           </div>
         </div>
       </header>

@@ -1,20 +1,21 @@
 import { Link, useParams } from "react-router";
-import { api } from "../api";
+import { api, taskApi } from "../api";
 import { Badge, Card, Empty, ErrorBox, Loading, SessionRow, Stat } from "../components";
 import { dateTime, relativeTime, tokens, usd } from "../format";
 import { useAsync } from "../useAsync";
+import { TaskRow } from "./TasksPage";
 
 export default function ProjectDetailPage() {
   const id = Number(useParams().projectId);
   const { data, error, loading } = useAsync(
-    () => Promise.all([api.project(id), api.sessions({ projectId: id, limit: 500 })]),
+    () => Promise.all([api.project(id), api.sessions({ projectId: id, limit: 500 }), taskApi.list({ projectId: id })]),
     [id],
   );
   if (loading && !data) return <Loading />;
   if (error) return <ErrorBox message={error} />;
   if (!data) return null;
 
-  const [project, sessions] = data;
+  const [project, sessions, tasks] = data;
   const cost = sessions.reduce((sum, s) => sum + (s.cost_usd ?? 0), 0);
   const hasCost = sessions.some((s) => s.cost_usd != null);
 
@@ -28,8 +29,14 @@ export default function ProjectDetailPage() {
           <h1 className="text-lg font-semibold">{project.name}</h1>
           <Badge>{project.branch ?? "브랜치 없음"}</Badge>
           {project.dirty_files > 0 && <Badge tone="amber">저장 안 된 변경 {project.dirty_files}</Badge>}
+          <Link
+            to={`/tasks/new?project=${project.id}`}
+            className="ml-auto inline-flex h-8 items-center rounded-md bg-blue-600 px-3 text-sm text-white hover:bg-blue-700"
+          >
+            이 프로젝트에 작업 지시
+          </Link>
         </div>
-        <div className="text-xs text-zinc-500">
+        <div className="text-xs text-zinc-500 [overflow-wrap:anywhere]">
           {project.path} · 마지막 커밋 {dateTime(project.last_commit_at)}
         </div>
       </div>
@@ -40,6 +47,14 @@ export default function ProjectDetailPage() {
         <Stat label="출력 토큰" value={tokens(project.output_tokens)} />
         <Stat label="기록된 비용" value={hasCost ? usd(cost) : "—"} hint={hasCost ? "세션 기록 기준" : "비용 정보 없음"} />
       </div>
+
+      {tasks.length > 0 && (
+        <Card title={`작업 ${tasks.length}`}>
+          {tasks.map((t) => (
+            <TaskRow key={t.id} t={t} showProject={false} />
+          ))}
+        </Card>
+      )}
 
       <Card title={`세션 ${sessions.length}`}>
         {sessions.length === 0 ? (

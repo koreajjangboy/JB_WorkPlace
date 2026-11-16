@@ -1,7 +1,7 @@
 # JB_WorkPlace MVP 설계안
 
 - 작성일: 2026-11-16
-- 상태: 설계 단계 (개발 미착수)
+- 상태: M1(보기), M2(지시) 완료 · 다음은 M3(검토)
 
 ---
 
@@ -205,7 +205,7 @@ record_usage(provider="runway", model="…", unit="credit", quantity=50, project
 
 1. 작업을 등록하면 상태가 `todo`가 된다.
 2. [실행]을 누르면 상태가 `running`이 되고, Runner가 프로젝트 폴더에서 Claude Code를 실행한다.
-   `claude -p "<지시>" --output-format stream-json`
+   `claude -p --output-format stream-json --verbose --restricted ...` (지시는 표준 입력으로 전달, 자세한 옵션은 README의 "실행 안전장치")
 3. 출력이 한 줄씩 나올 때마다 Event로 저장하고 SSE로 화면에 보낸다.
 4. 실행이 끝나면 상태가 `review`가 되고, `git diff`와 사용량을 함께 기록한다.
 5. 사람이 결과를 보고 고른다.
@@ -221,7 +221,7 @@ record_usage(provider="runway", model="…", unit="credit", quantity=50, project
 - **동시 실행 1~2개 제한**: 비용 폭주와 파일 충돌을 막는다.
 - **실행 폴더 제한**: 등록된 프로젝트 폴더 밖에서는 실행하지 않는다.
 - **커밋, push 없음**: 에이전트는 파일만 바꾸고, 커밋은 사람이 직접 한다.
-- **최대 실행 시간 / 최대 턴 수 제한**: 한도를 넘으면 자동으로 중단한다.
+- **최대 실행 시간 / 비용 상한**: 시간 제한을 넘으면 자동으로 중단하고, 실행 1회 비용은 `--max-budget-usd`로 막는다. (Claude Code CLI에 최대 턴 수 옵션이 없어 비용 상한으로 대신함)
 - **로컬 전용**: 서버는 `127.0.0.1`에서만 열고 외부에서 접근하지 못하게 한다.
 
 ---

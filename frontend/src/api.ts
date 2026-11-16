@@ -51,7 +51,7 @@ export type ScanResult = {
   finished_at: string;
 };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init);
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`;
@@ -81,4 +81,97 @@ export const api = {
     request<Transcript>(`/api/sessions/${id}/transcript?offset=${offset}&limit=${limit}`),
   scanStatus: () => request<ScanResult | null>("/api/scan"),
   scan: () => request<ScanResult>("/api/scan", { method: "POST" }),
+};
+
+// ---------------------------------------------------------------- M2: 작업 / 실행
+
+export type TaskStatus = "todo" | "running" | "review" | "done" | "failed";
+export type RunStatus = "running" | "succeeded" | "failed" | "stopped";
+
+export type Run = {
+  id: number;
+  task_id: number;
+  prompt: string;
+  status: RunStatus;
+  session_id: string | null;
+  resumed_from: string | null;
+  started_at: string;
+  ended_at: string | null;
+  exit_code: number | null;
+  error: string | null;
+  model: string | null;
+  num_turns: number | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  cost_usd: number | null;
+};
+
+export type Task = {
+  id: number;
+  project_id: number;
+  project_name: string | null;
+  title: string;
+  prompt: string;
+  status: TaskStatus;
+  session_id: string | null;
+  created_at: string;
+  updated_at: string;
+  run_count: number;
+  total_cost_usd: number | null;
+  last_run: Run | null;
+};
+
+export type TaskDetail = Task & {
+  project_path: string | null;
+  project_dirty_files: number;
+  runs: Run[];
+};
+
+export type RunEvent = {
+  seq: number;
+  ts: string;
+  kind: "init" | "text" | "tool_use" | "tool_result" | "result" | "error" | "stderr";
+  payload: Record<string, any>;
+};
+
+export type RunnerStatus = {
+  claude_found: boolean;
+  claude_path: string | null;
+  running: number;
+  max_concurrent: number;
+  max_minutes: number;
+  max_budget_usd: number;
+  model: string | null;
+  allowed_tools: string[];
+  disallowed_tools: string[];
+};
+
+const json = (body: unknown): RequestInit => ({
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+export const taskApi = {
+  runner: () => request<RunnerStatus>("/api/runner"),
+  list: (params: { projectId?: number; status?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.projectId != null) q.set("project_id", String(params.projectId));
+    if (params.status) q.set("status", params.status);
+    return request<Task[]>(`/api/tasks?${q}`);
+  },
+  counts: () => request<Record<string, number>>("/api/tasks/counts"),
+  get: (id: number) => request<TaskDetail>(`/api/tasks/${id}`),
+  create: (body: { project_id: number; prompt: string; title?: string; run_now: boolean }) =>
+    request<Task>("/api/tasks", json(body)),
+  remove: async (id: number) => {
+    const res = await fetch(`/api/tasks/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? res.statusText);
+  },
+  run: (id: number, prompt?: string) => request<Run>(`/api/tasks/${id}/runs`, json({ prompt: prompt ?? null })),
+  stop: (runId: number) => request<{ ok: boolean }>(`/api/runs/${runId}/stop`, { method: "POST" }),
+  events: (runId: number) => request<RunEvent[]>(`/api/runs/${runId}/events`),
+  streamUrl: (runId: number, after = -1) => `/api/runs/${runId}/stream?after=${after}`,
 };

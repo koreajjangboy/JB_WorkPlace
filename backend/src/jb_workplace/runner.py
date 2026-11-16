@@ -1,0 +1,410 @@
+"""Claude Code를 프로젝트 폴더에서 실행하고, 출력(stream-json)을 RunEvent로 기록한다.
+
+안전장치
+- --restricted: 사용자/프로젝트 설정 파일을 무시하고, 파일 도구를 프로젝트 폴더 안으로 제한한다.
+- --strict-mcp-config: MCP 서버를 쓰지 않는다.
+- --permission-prompts none: 허용 목록(runner_allowed_tools)에 없는 동작은 자동으로 거부된다.
+- --max-budget-usd + 시간 제한 + 동시 실행 수 제한.
+- 지시(prompt)는 명령줄이 아니라 표준 입력으로 넘긴다.
+"""
+
+import json
+import logging
+import os
+import subprocess
+import threading
+from collections import deque
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy import func
+from sqlmodel import Session, select
+
+from .config import get_settings
+from .db import engine
+from .models import Project, Run, RunEvent, Task
+from .scanner.sessions import TOOL_INPUT_LIMIT, TOOL_RESULT_LIMIT, TEXT_LIMIT, _text_of, _truncate
+
+log = logging.getLogger(__name__)
+
+_lock = threading.Lock()
+_procs: dict[int, subprocess.Popen] = {}
+_kill_reasons: dict[int, str] = {}  # run_id -> "stopped" | "timeout"
+
+MAX_STDERR_EVENTS = 50
+
+
+class RunnerError(Exception):
+    """실행을 시작할 수 없을 때 (사용자에게 그대로 보여줄 메시지)."""
+
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+def make_title(prompt: str) -> str:
+    first = next((line.strip() for line in prompt.splitlines() if line.strip()), "새 작업")
+    return first if len(first) <= 60 else first[:57] + "…"
+
+
+def running_count(db: Session) -> int:
+    return db.exec(select(func.count()).select_from(Run).where(Run.status == "running")).one()
+
+
+def _build_args(exe: str, task: Task, resume: str | None) -> list[str]:
+    s = get_settings()
+    args = [
+        exe, "-p",
+        "--output-format", "stream-json", "--verbose",
+        "--restricted", "--strict-mcp-config",
+        "--tools", s.runner_tools,
+        "--permission-mode", "manual",
+        "--permission-prompts", "none",
+        "--allowedTools", s.runner_allowed_tools,
+        "--disallowedTools", s.runner_disallowed_tools,
+        "--max-budget-usd", f"{s.runner_max_budget_usd:g}",
+        "--name", f"WorkPlace #{task.id}: {task.title}"[:120],
+    ]
+    if s.runner_model:
+        args += ["--model", s.runner_model]
+    if resume:
+        args += ["--resume", resume]
+    return args
+
+
+# ---------------------------------------------------------------- 시작 / 중단
+
+
+def start_run(task_id: int, prompt: str | None = None) -> Run:
+    """작업을 실행한다. prompt가 없으면 작업의 원래 지시를 쓴다 (첫 실행)."""
+    settings = get_settings()
+    exe = settings.resolved_claude_exe
+    if not exe:
+        raise RunnerError("claude 실행 파일을 찾지 못했습니다. backend/.env 의 CLAUDE_EXE 를 설정하세요.", 503)
+
+    with _lock:
+        with Session(engine) as db:
+            task = db.get(Task, task_id)
+            if task is None:
+                raise RunnerError("작업을 찾을 수 없습니다", 404)
+            project = db.get(Project, task.project_id)
+            if project is None or not project.exists or not Path(project.path).is_dir():
+                raise RunnerError("프로젝트 폴더가 없습니다. [다시 스캔] 후 확인하세요.", 409)
+            if task.status == "running":
+                raise RunnerError("이 작업은 이미 실행 중입니다", 409)
+            if running_count(db) >= settings.runner_max_concurrent:
+                raise RunnerError(
+                    f"동시에 {settings.runner_max_concurrent}개까지만 실행할 수 있습니다. 실행 중인 작업이 끝난 뒤 다시 시도하세요.",
+                    409,
+                )
+            resume = task.session_id
+            text = (prompt or "").strip() or (task.prompt if resume is None else "")
+            if not text:
+                raise RunnerError("지시 내용을 입력하세요")
+
+            run = Run(task_id=task.id, prompt=text, status="running", started_at=_now(), resumed_from=resume)
+            task.status = "running"
+            task.updated_at = _now()
+            db.add(run)
+            db.add(task)
+            db.commit()
+            db.refresh(run)
+            db.refresh(task)
+            run_id, cwd = run.id, project.path
+            args = _build_args(exe, task, resume)
+
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        try:
+            proc = subprocess.Popen(
+                args,
+                cwd=cwd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                creationflags=flags,
+            )
+        except OSError as exc:
+            _finish(run_id, status="failed", error=f"claude 실행 실패: {exc}")
+            raise RunnerError(f"claude 실행 실패: {exc}", 500) from exc
+
+        _procs[run_id] = proc
+        with Session(engine) as db:
+            row = db.get(Run, run_id)
+            row.pid = proc.pid
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            result = row
+
+    threading.Thread(target=_watch, args=(run_id, proc, text), daemon=True, name=f"run-{run_id}").start()
+    return result
+
+
+def stop_run(run_id: int) -> bool:
+    proc = _procs.get(run_id)
+    if proc is None or proc.poll() is not None:
+        return False
+    _kill(run_id, "stopped")
+    return True
+
+
+def _kill(run_id: int, reason: str) -> None:
+    proc = _procs.get(run_id)
+    if proc is None:
+        return
+    _kill_reasons.setdefault(run_id, reason)
+    _kill_tree(proc.pid)
+
+
+def _kill_tree(pid: int) -> None:
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+    else:
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------- 출력 처리
+
+
+class _EventWriter:
+    def __init__(self, run_id: int):
+        self.run_id = run_id
+        self.seq = 0
+
+    def add(self, kind: str, payload: dict[str, Any]) -> None:
+        with Session(engine) as db:
+            db.add(RunEvent(run_id=self.run_id, seq=self.seq, ts=_now(), kind=kind, payload=payload))
+            db.commit()
+        self.seq += 1
+
+
+def _tool_summary(name: str, tool_input: dict[str, Any]) -> str:
+    for key in ("command", "file_path", "pattern", "path", "url", "description"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value:
+            return value if len(value) <= 160 else value[:157] + "…"
+    return ""
+
+
+def _update_run(run_id: int, **fields: Any) -> None:
+    with Session(engine) as db:
+        row = db.get(Run, run_id)
+        for key, value in fields.items():
+            setattr(row, key, value)
+        db.add(row)
+        db.commit()
+
+
+def _handle_line(run_id: int, line: str, writer: _EventWriter, state: dict[str, Any]) -> None:
+    line = line.strip()
+    if not line:
+        return
+    try:
+        msg = json.loads(line)
+    except json.JSONDecodeError:
+        writer.add("stderr", {"text": _truncate(line, TOOL_RESULT_LIMIT)})
+        return
+    if not isinstance(msg, dict):
+        return
+    mtype = msg.get("type")
+
+    if mtype == "system" and msg.get("subtype") == "init":
+        state["session_id"] = msg.get("session_id")
+        _update_run(run_id, session_id=msg.get("session_id"), model=msg.get("model"))
+        writer.add("init", {"session_id": msg.get("session_id"), "model": msg.get("model"), "tools": msg.get("tools", [])})
+        return
+
+    if mtype == "assistant":
+        message = msg.get("message") or {}
+        for block in message.get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and block.get("text", "").strip():
+                writer.add("text", {"text": _truncate(block["text"], TEXT_LIMIT)})
+            elif block.get("type") == "tool_use":
+                tool_input = block.get("input") or {}
+                writer.add("tool_use", {
+                    "id": block.get("id"),
+                    "name": block.get("name"),
+                    "summary": _tool_summary(block.get("name", ""), tool_input),
+                    "input": _truncate(json.dumps(tool_input, ensure_ascii=False, indent=2), TOOL_INPUT_LIMIT),
+                })
+        return
+
+    if mtype == "user":
+        message = msg.get("message") or {}
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    raw = block.get("content")
+                    text = raw if isinstance(raw, str) else _text_of(raw)
+                    writer.add("tool_result", {
+                        "tool_use_id": block.get("tool_use_id"),
+                        "text": _truncate(text or "", TOOL_RESULT_LIMIT),
+                        "is_error": bool(block.get("is_error")),
+                    })
+        return
+
+    if mtype == "result":
+        usage = msg.get("usage") or {}
+        state["result"] = msg
+        denials = [
+            {"tool": d.get("tool_name"), "summary": _tool_summary(d.get("tool_name", ""), d.get("tool_input") or {})}
+            for d in msg.get("permission_denials") or []
+            if isinstance(d, dict)
+        ]
+        _update_run(
+            run_id,
+            session_id=msg.get("session_id") or state.get("session_id"),
+            num_turns=msg.get("num_turns"),
+            cost_usd=msg.get("total_cost_usd"),
+            input_tokens=int(usage.get("input_tokens") or 0),
+            output_tokens=int(usage.get("output_tokens") or 0),
+            cache_creation_tokens=int(usage.get("cache_creation_input_tokens") or 0),
+            cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
+        )
+        writer.add("result", {
+            "subtype": msg.get("subtype"),
+            "is_error": bool(msg.get("is_error")),
+            "text": _truncate(str(msg.get("result") or ""), TEXT_LIMIT),
+            "cost_usd": msg.get("total_cost_usd"),
+            "num_turns": msg.get("num_turns"),
+            "duration_ms": msg.get("duration_ms"),
+            "denials": denials,
+        })
+    # rate_limit_event, task_summary 같은 나머지 메시지는 화면에 필요 없어 버린다.
+
+
+def _watch(run_id: int, proc: subprocess.Popen, prompt: str) -> None:
+    settings = get_settings()
+    writer = _EventWriter(run_id)
+    state: dict[str, Any] = {}
+    stderr_tail: deque[str] = deque(maxlen=20)
+
+    def read_stderr() -> None:
+        sent = 0
+        for raw in proc.stderr:
+            text = raw.rstrip()
+            if not text:
+                continue
+            stderr_tail.append(text)
+            if sent < MAX_STDERR_EVENTS:
+                writer.add("stderr", {"text": _truncate(text, TOOL_RESULT_LIMIT)})
+                sent += 1
+
+    timer = threading.Timer(settings.runner_max_minutes * 60, _kill, args=(run_id, "timeout"))
+    timer.daemon = True
+    stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+    try:
+        timer.start()
+        stderr_thread.start()
+        try:
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+        except OSError as exc:
+            writer.add("error", {"text": f"지시를 전달하지 못했습니다: {exc}"})
+        for line in proc.stdout:
+            try:
+                _handle_line(run_id, line, writer, state)
+            except Exception:  # 한 줄 처리 실패가 실행 전체를 멈추지 않게 한다
+                log.exception("출력 처리 실패 (run %s)", run_id)
+        code = proc.wait()
+        stderr_thread.join(timeout=5)
+    finally:
+        timer.cancel()
+        _procs.pop(run_id, None)
+
+    reason = _kill_reasons.pop(run_id, None)
+    result = state.get("result")
+    if reason == "stopped":
+        status, error = "stopped", "사용자가 중단했습니다"
+    elif reason == "timeout":
+        status, error = "failed", f"시간 제한({settings.runner_max_minutes}분)을 넘어 중단했습니다"
+    elif result is None:
+        tail = " / ".join(list(stderr_tail)[-3:])
+        status, error = "failed", f"결과 없이 종료됐습니다 (종료 코드 {code}){': ' + tail if tail else ''}"
+    elif result.get("is_error") or result.get("subtype") != "success":
+        status, error = "failed", f"{result.get('subtype')}: {str(result.get('result') or '')[:300]}"
+    else:
+        status, error = "succeeded", None
+    if error:
+        writer.add("error", {"text": error})
+    _finish(run_id, status=status, error=error, exit_code=code, session_id=state.get("session_id"))
+
+    # 이번 실행의 세션 기록도 색인하도록 스캔을 한 번 돌린다.
+    from .sync import run_scan
+
+    threading.Thread(target=_safe_scan, args=(run_scan,), daemon=True).start()
+
+
+def _safe_scan(run_scan) -> None:
+    try:
+        run_scan()
+    except Exception:
+        log.exception("실행 후 스캔 실패")
+
+
+def _finish(run_id: int, *, status: str, error: str | None, exit_code: int | None = None,
+            session_id: str | None = None) -> None:
+    with Session(engine) as db:
+        run = db.get(Run, run_id)
+        run.status = status
+        run.error = error
+        run.exit_code = exit_code
+        run.ended_at = _now()
+        if session_id and not run.session_id:
+            run.session_id = session_id
+        task = db.get(Task, run.task_id)
+        task.status = "review" if status == "succeeded" else "failed"
+        if run.session_id:
+            task.session_id = run.session_id
+        task.updated_at = _now()
+        db.add(run)
+        db.add(task)
+        db.commit()
+
+
+# ---------------------------------------------------------------- 서버 시작 시 정리
+
+
+def _is_claude_process(pid: int) -> bool:
+    if os.name != "nt":
+        return False
+    out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True, text=True)
+    return "claude" in (out.stdout or "").lower()
+
+
+def recover_orphans() -> None:
+    """서버가 꺼질 때 실행 중이던 작업을 실패로 표시하고, 남은 claude 프로세스를 끝낸다."""
+    with Session(engine) as db:
+        runs = db.exec(select(Run).where(Run.status == "running")).all()
+        for run in runs:
+            if run.id in _procs:
+                continue
+            if run.pid and _is_claude_process(run.pid):
+                _kill_tree(run.pid)
+            run.status = "failed"
+            run.error = "서버가 다시 시작되어 실행이 중단됐습니다"
+            run.ended_at = _now()
+            db.add(run)
+            task = db.get(Task, run.task_id)
+            if task and task.status == "running":
+                task.status = "failed"
+                task.updated_at = _now()
+                db.add(task)
+        db.commit()
+        if runs:
+            log.warning("중단된 실행 %d개를 정리했습니다", len(runs))
