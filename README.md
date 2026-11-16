@@ -27,6 +27,13 @@
   미리 스테이징돼 있던 다른 파일은 섞지 않는다. push는 하지 않는다
 - [커밋 없이 완료]: 직접 커밋했거나 바꾼 파일이 없는 작업
 
+**프로젝트 변경 사항** (`/projects/:id/changes`)
+- 프로젝트 목록이나 상세 화면의 "저장 안 된 변경 N"을 누르면, 작업과 상관없이 그 프로젝트의 저장 안 된 변경을 모두 본다
+- 파일별 diff, 바이너리·큰 파일 표시, 커밋할 파일 선택
+- [Claude에게 메시지 쓰게 하기]: 고른 파일의 내용과 저장소의 기존 커밋 스타일을 보고 메시지 초안을 쓴다
+  (읽기 전용 실행, 세션 기록 안 남김, 기본 모델 `sonnet`, 1회 비용 상한 $0.5)
+- 메시지를 확인·수정한 뒤 [승인하고 커밋]. 고른 파일만 커밋하고 push는 하지 않는다
+
 ### 실행 안전장치
 
 Claude Code는 아래 옵션으로 실행된다 ([runner.py](backend/src/jb_workplace/runner.py)).
@@ -96,3 +103,5 @@ cd frontend; npm run dev
 | `RUNNER_MAX_MINUTES` | `30` | 실행 1회 최대 시간 (넘으면 중단) |
 | `RUNNER_MAX_BUDGET_USD` | `2.0` | 실행 1회 비용 상한 |
 | `RUNNER_MODEL` | (기본 모델) | 실행에 쓸 모델 (예: `sonnet`, `opus`) |
+| `COMMIT_MESSAGE_MODEL` | `sonnet` | 커밋 메시지 초안을 쓸 모델 |
+| `COMMIT_MESSAGE_BUDGET_USD` | `0.5` | 커밋 메시지 초안 1회 비용 상한 |

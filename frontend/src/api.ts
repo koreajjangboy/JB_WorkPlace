@@ -188,6 +188,8 @@ export type FileChange = {
   pre_existing: boolean;
   additions: number | null;
   deletions: number | null;
+  binary: boolean;
+  size_bytes: number | null;
 };
 
 export type Changes = {
@@ -205,4 +207,16 @@ export const reviewApi = {
   commit: (taskId: number, message: string, files: string[]) =>
     request<Task>(`/api/tasks/${taskId}/commit`, json({ message, files })),
   complete: (taskId: number) => request<Task>(`/api/tasks/${taskId}/complete`, { method: "POST" }),
+};
+
+// ---------------------------------------------------------------- 프로젝트의 저장 안 된 변경 전체
+
+export const projectChangesApi = {
+  changes: (projectId: number) => request<FileChange[]>(`/api/projects/${projectId}/changes`),
+  diff: (projectId: number, path: string) =>
+    request<{ path: string; diff: string }>(`/api/projects/${projectId}/diff?path=${encodeURIComponent(path)}`),
+  draftMessage: (projectId: number, files: string[]) =>
+    request<{ message: string; cost_usd: number | null }>(`/api/projects/${projectId}/commit-message`, json({ files })),
+  commit: (projectId: number, files: string[], message: string) =>
+    request<{ sha: string }>(`/api/projects/${projectId}/commit`, json({ files, message })),
 };

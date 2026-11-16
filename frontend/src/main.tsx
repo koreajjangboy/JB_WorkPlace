@@ -4,6 +4,7 @@ import { BrowserRouter, Route, Routes } from "react-router";
 import App from "./App";
 import "./index.css";
 import HomePage from "./pages/HomePage";
+import ProjectChangesPage from "./pages/ProjectChangesPage";
 import ProjectDetailPage from "./pages/ProjectDetailPage";
 import ProjectsPage from "./pages/ProjectsPage";
 import NewTaskPage from "./pages/NewTaskPage";
@@ -19,6 +20,7 @@ createRoot(document.getElementById("root")!).render(
           <Route index element={<HomePage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+          <Route path="projects/:projectId/changes" element={<ProjectChangesPage />} />
           <Route path="sessions/:sessionId" element={<SessionPage />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="tasks/new" element={<NewTaskPage />} />

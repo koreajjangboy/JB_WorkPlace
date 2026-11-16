@@ -88,6 +88,8 @@ class FileChange:
     pre_existing: bool  # 작업 전부터 저장 안 된 변경이 있던 파일
     additions: int | None = None
     deletions: int | None = None
+    binary: bool = False
+    size_bytes: int | None = None  # 지금 파일 크기 (삭제된 파일은 없음)
 
 
 def _kind(code: str) -> str:
@@ -115,6 +117,7 @@ def task_changes(repo: str, baseline: dict[str, dict[str, str]] | None) -> list[
         elif before.get("hash") != hashes.get(path):
             changes.append(FileChange(path, code, _kind(code), pre_existing=True))
 
+    binary_paths: set[str] = set()
     if changes and _has_head(repo):
         tracked = [c.path for c in changes if c.status != "??"]
         if tracked:
@@ -125,19 +128,36 @@ def task_changes(repo: str, baseline: dict[str, dict[str, str]] | None) -> list[
                 if len(cols) == 3:
                     add, dele, p = cols
                     stats[p] = (int(add) if add.isdigit() else None, int(dele) if dele.isdigit() else None)
+                    if add == "-":
+                        binary_paths.add(p)
             for c in changes:
                 if c.path in stats:
                     c.additions, c.deletions = stats[c.path]
+                c.binary = c.path in binary_paths
     for c in changes:
+        file = Path(repo) / c.path
+        if file.is_file():
+            c.size_bytes = file.stat().st_size
         if c.status == "??" and c.additions is None:
-            file = Path(repo) / c.path
             try:
-                data = file.read_bytes()
-                if b"\0" not in data[:8000]:
+                with file.open("rb") as fh:
+                    head = fh.read(8000)
+                if b"\0" in head:
+                    c.binary = True
+                elif (c.size_bytes or 0) <= 5_000_000:
+                    data = file.read_bytes()
                     c.additions, c.deletions = data.count(b"\n") + (0 if data.endswith(b"\n") or not data else 1), 0
             except OSError:
                 pass
     return sorted(changes, key=lambda c: c.path)
+
+
+def all_changes(repo: str) -> list[FileChange]:
+    """프로젝트의 저장 안 된 변경 전부 (작업과 상관없이)."""
+    changes = task_changes(repo, None)
+    for c in changes:
+        c.pre_existing = False
+    return changes
 
 
 def file_diff(repo: str, path: str, status: str) -> str:

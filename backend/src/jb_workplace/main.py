@@ -9,6 +9,7 @@ from .api import router
 from .config import get_settings
 from .runner import recover_orphans
 from .sync import run_scan
+from .project_changes_api import router as project_changes_router
 from .tasks_api import router as tasks_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -41,3 +42,4 @@ app.add_middleware(
 )
 app.include_router(router)
 app.include_router(tasks_router)
+app.include_router(project_changes_router)

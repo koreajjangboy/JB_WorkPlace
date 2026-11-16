@@ -220,3 +220,22 @@ def run_scan() -> ScanResult:
         )
         log.info("스캔 완료: %s", _last_result)
         return _last_result
+
+
+def refresh_project(project_id: int) -> None:
+    """커밋 직후처럼 한 프로젝트의 git 상태만 다시 읽는다."""
+    from .scanner.projects import _read_repo
+
+    with Session(engine) as db:
+        project = db.get(Project, project_id)
+        if project is None or not Path(project.path).is_dir():
+            return
+        info = _read_repo(Path(project.path))
+        project.branch = info.branch
+        project.dirty_files = info.dirty_files
+        project.last_commit_at = _as_utc(info.last_commit_at)
+        if project.last_commit_at and (project.last_activity_at is None or project.last_commit_at > project.last_activity_at):
+            project.last_activity_at = project.last_commit_at
+        project.scanned_at = datetime.now(UTC)
+        db.add(project)
+        db.commit()

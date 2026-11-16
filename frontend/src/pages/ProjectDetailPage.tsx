@@ -28,7 +28,11 @@ export default function ProjectDetailPage() {
         <div className="mt-1 flex flex-wrap items-center gap-2">
           <h1 className="text-lg font-semibold">{project.name}</h1>
           <Badge>{project.branch ?? "브랜치 없음"}</Badge>
-          {project.dirty_files > 0 && <Badge tone="amber">저장 안 된 변경 {project.dirty_files}</Badge>}
+          {project.dirty_files > 0 && (
+            <Link to={`/projects/${project.id}/changes`} className="hover:opacity-80" title="변경 내용 보고 커밋하기">
+              <Badge tone="amber">저장 안 된 변경 {project.dirty_files} · 보기</Badge>
+            </Link>
+          )}
           <Link
             to={`/tasks/new?project=${project.id}`}
             className="ml-auto inline-flex h-8 items-center rounded-md bg-blue-600 px-3 text-sm text-white hover:bg-blue-700"

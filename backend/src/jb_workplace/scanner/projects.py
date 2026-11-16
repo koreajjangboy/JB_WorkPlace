@@ -37,7 +37,7 @@ def _git(repo: Path, *args: str) -> str | None:
 
 def _read_repo(repo: Path) -> RepoInfo:
     branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
-    status = _git(repo, "status", "--porcelain")
+    status = _git(repo, "status", "--porcelain", "--untracked-files=all")
     last = _git(repo, "log", "-1", "--format=%cI")
     last_commit_at = None
     if last and last.strip():

@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     runner_max_minutes: int = 30
     runner_max_budget_usd: float = 2.0  # 실행 1회당 비용 상한 (--max-budget-usd)
     runner_model: str = ""  # 비워 두면 Claude Code 기본 모델
+    # 커밋 메시지 초안을 쓸 때 쓰는 모델과 비용 상한 (읽기만 하는 짧은 실행)
+    commit_message_model: str = "sonnet"
+    commit_message_budget_usd: float = 0.5
 
     @property
     def scan_root_paths(self) -> list[Path]:

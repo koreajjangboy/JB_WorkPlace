@@ -323,6 +323,8 @@ class FileChangeOut(BaseModel):
     pre_existing: bool
     additions: int | None
     deletions: int | None
+    binary: bool = False
+    size_bytes: int | None = None
 
 
 class ChangesOut(BaseModel):

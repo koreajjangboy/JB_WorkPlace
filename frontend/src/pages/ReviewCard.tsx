@@ -1,85 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { reviewApi, type FileChange, type TaskDetail } from "../api";
-import { Badge, Button, Card, Empty, ErrorBox } from "../components";
+import { Link } from "react-router";
+import { reviewApi, type TaskDetail } from "../api";
+import { FileRow } from "../changes";
+import { Button, Card, Empty, ErrorBox } from "../components";
 import { dateTime } from "../format";
 import { useAsync } from "../useAsync";
 
-const KIND: Record<FileChange["kind"], [string, "green" | "blue" | "red" | "zinc"]> = {
-  added: ["추가", "green"],
-  modified: ["수정", "blue"],
-  deleted: ["삭제", "red"],
-  renamed: ["이름 변경", "zinc"],
-};
-
-function DiffView({ text }: { text: string }) {
-  return (
-    <pre className="max-h-96 overflow-auto bg-zinc-50 py-2 font-mono text-[12px] leading-5 dark:bg-zinc-950">
-      {text.split("\n").map((line, i) => {
-        let cls = "text-zinc-500";
-        if (line.startsWith("+") && !line.startsWith("+++")) cls = "bg-green-50 text-green-800 dark:bg-green-950/50 dark:text-green-300";
-        else if (line.startsWith("-") && !line.startsWith("---")) cls = "bg-red-50 text-red-800 dark:bg-red-950/50 dark:text-red-300";
-        else if (line.startsWith("@@")) cls = "text-blue-600 dark:text-blue-400";
-        else if (!/^(diff |index |--- |\+\+\+ |새 파일)/.test(line)) cls = "text-zinc-700 dark:text-zinc-300";
-        return (
-          <div key={i} className={`px-3 whitespace-pre-wrap [overflow-wrap:anywhere] ${cls}`}>
-            {line || " "}
-          </div>
-        );
-      })}
-    </pre>
-  );
-}
-
-function FileRow({
-  taskId,
-  file,
-  checked,
-  onToggle,
-}: {
-  taskId: number;
-  file: FileChange;
-  checked: boolean;
-  onToggle: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [diff, setDiff] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [label, tone] = KIND[file.kind];
-
-  async function toggleDiff() {
-    const next = !open;
-    setOpen(next);
-    if (next && diff === null) {
-      try {
-        setDiff((await reviewApi.diff(taskId, file.path)).diff);
-      } catch (e) {
-        setError((e as Error).message);
-      }
-    }
-  }
-
-  return (
-    <div className="border-t border-zinc-100 first:border-t-0 dark:border-zinc-800">
-      <div className="flex items-center gap-2 py-2">
-        <input type="checkbox" checked={checked} onChange={onToggle} aria-label={`${file.path} 커밋에 포함`} />
-        <Badge tone={tone}>{label}</Badge>
-        <button onClick={toggleDiff} className="min-w-0 flex-1 truncate text-left font-mono text-xs hover:underline">
-          {file.path}
-        </button>
-        {file.pre_existing && <Badge tone="amber">작업 전부터 변경</Badge>}
-        <span className="shrink-0 font-mono text-xs tabular-nums">
-          {file.additions != null && <span className="text-green-700 dark:text-green-400">+{file.additions}</span>}{" "}
-          {file.deletions != null && <span className="text-red-700 dark:text-red-400">−{file.deletions}</span>}
-        </span>
-      </div>
-      {open && (
-        <div className="mb-2 overflow-hidden rounded-md border border-zinc-200 dark:border-zinc-800">
-          {error ? <div className="p-3 text-xs text-red-600">{error}</div> : diff === null ? <div className="p-3 text-xs text-zinc-500">불러오는 중…</div> : <DiffView text={diff} />}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default function ReviewCard({ task, onChanged }: { task: TaskDetail; onChanged: () => void }) {
   const { data, error, loading, reload } = useAsync(() => reviewApi.changes(task.id), [task.id, task.updated_at]);
@@ -163,7 +89,18 @@ export default function ReviewCard({ task, onChanged }: { task: TaskDetail; onCh
           )}
 
           {files.length === 0 ? (
-            <Empty>{data.commit_sha ? "커밋한 뒤로 새로 바뀐 파일이 없습니다." : "이 작업이 바꾼 파일이 없습니다."}</Empty>
+            <div>
+              <Empty>{data.commit_sha ? "커밋한 뒤로 새로 바뀐 파일이 없습니다." : "이 작업이 바꾼 파일이 없습니다."}</Empty>
+              {task.project_dirty_files > 0 && (
+                <p className="-mt-3 text-center text-xs text-zinc-600 dark:text-zinc-400">
+                  작업 전부터 있던 저장 안 된 변경 {task.project_dirty_files}개는{" "}
+                  <Link to={`/projects/${task.project_id}/changes`} className="text-blue-600 hover:underline dark:text-blue-400">
+                    프로젝트 변경 사항
+                  </Link>
+                  에서 확인하고 커밋할 수 있습니다.
+                </p>
+              )}
+            </div>
           ) : (
             <div>
               <div className="mb-1 flex items-center justify-between text-xs text-zinc-500">
@@ -180,7 +117,13 @@ export default function ReviewCard({ task, onChanged }: { task: TaskDetail; onCh
                 </span>
               </div>
               {files.map((f) => (
-                <FileRow key={f.path} taskId={task.id} file={f} checked={selected.has(f.path)} onToggle={() => toggle(f.path)} />
+                <FileRow
+                  key={f.path}
+                  file={f}
+                  checked={selected.has(f.path)}
+                  onToggle={() => toggle(f.path)}
+                  loadDiff={async (p) => (await reviewApi.diff(task.id, p)).diff}
+                />
               ))}
               {preExistingSelected && (
                 <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">

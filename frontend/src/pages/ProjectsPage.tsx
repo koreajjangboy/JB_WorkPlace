@@ -80,7 +80,13 @@ export default function ProjectsPage() {
                     </td>
                     <td className="py-2 pr-3"><Badge>{p.branch ?? "—"}</Badge></td>
                     <td className="py-2 text-right tabular-nums">
-                      {p.dirty_files > 0 ? <Badge tone="amber">{p.dirty_files}</Badge> : <span className="text-zinc-400">0</span>}
+                      {p.dirty_files > 0 ? (
+                        <Link to={`/projects/${p.id}/changes`} className="hover:opacity-80" title="변경 내용 보고 커밋하기">
+                          <Badge tone="amber">{p.dirty_files}</Badge>
+                        </Link>
+                      ) : (
+                        <span className="text-zinc-400">0</span>
+                      )}
                     </td>
                     <td className="py-2 text-right tabular-nums">{p.session_count || <span className="text-zinc-400">0</span>}</td>
                     <td className="py-2 text-right tabular-nums">{p.output_tokens ? tokens(p.output_tokens) : <span className="text-zinc-400">—</span>}</td>
