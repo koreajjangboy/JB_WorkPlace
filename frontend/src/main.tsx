@@ -11,6 +11,7 @@ import NewTaskPage from "./pages/NewTaskPage";
 import SessionPage from "./pages/SessionPage";
 import TaskDetailPage from "./pages/TaskDetailPage";
 import TasksPage from "./pages/TasksPage";
+import UsagePage from "./pages/UsagePage";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -25,6 +26,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="tasks" element={<TasksPage />} />
           <Route path="tasks/new" element={<NewTaskPage />} />
           <Route path="tasks/:taskId" element={<TaskDetailPage />} />
+          <Route path="usage" element={<UsagePage />} />
         </Route>
       </Routes>
     </BrowserRouter>

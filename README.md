@@ -3,7 +3,7 @@
 내 AI 작업을 한 페이지에서 보고, Claude Code에 작업을 지시하는 로컬 웹앱.
 설계: [docs/MVP-design.md](docs/MVP-design.md)
 
-## 현재 단계: M2 (지시)
+## 현재 단계: MVP 완료 (M1~M4)
 
 **M1 보기**
 - `C:\dev` 바로 아래의 git 저장소를 프로젝트로 등록 (브랜치, 저장 안 된 변경, 마지막 커밋)
@@ -74,12 +74,34 @@ Claude Code는 아래 옵션으로 실행된다 ([runner.py](backend/src/jb_work
 
 `git status`, `git diff` 같은 읽기 전용 명령은 Claude Code가 스스로 허용한다.
 
+**M4 대시보드·사용량**
+- 홈: 최근 7일/30일 AI 비용(환산, 지난 기간 대비), provider 수, 실행 중·리뷰 대기, 저장 안 된 변경·push 안 된 커밋
+- AI 사용량: 일별 비용 누적 막대(상위 5개 provider + 기타), provider 순위와 추이, 전체/텍스트/미디어 필터
+- 사용량 화면(`/usage`): 7·30·90일, provider별 고유 단위 사용량(토큰·문자·크레딧·초 …), 모델별·프로젝트별, 이름·종류·색 설정, 단가표
+- provider는 고정 목록이 아니다. 처음 기록이 들어오면 자동 등록되고, 단가가 없으면 "단가 없음"으로 표시된다
+- 비용 = 기록에 있는 실제 비용, 없으면 단가표(모델별 → provider 공통). 단가를 고치면 과거 기록도 다시 계산된다
+- Claude: 세션 기록(하위 에이전트 포함)에서 날짜·모델별 토큰을 자동 수집. 기본 단가는 Anthropic 공식 단가로 넣어 두었다
+  (Team 플랜이면 실제 청구가 아니라 사용 한도에서 차감되는 양을 API 단가로 환산한 값)
+- 다른 provider: 각 프로젝트에 `clients/python/jb_usage.py`를 복사해 기록한다
+
+```python
+from jb_usage import record_usage, record_openai, record_gemini
+
+record_usage("runway", unit="credit", quantity=50, model="gen4_turbo", kind="video")
+record_usage("elevenlabs", unit="char", quantity=len(text), kind="audio")
+record_openai(response)                       # OpenAI(또는 provider="upstage") 응답의 토큰 수
+record_gemini(response)                       # google-genai 응답의 토큰 수
+```
+
+WorkPlace 서버가 꺼져 있어도 앱은 그대로 동작한다 (기록만 빠진다). 주소는 `JB_WORKPLACE_URL`, 프로젝트 이름은 `JB_WORKPLACE_PROJECT`로 바꿀 수 있다.
+
 ## 구성
 
 ```
 backend/   FastAPI + SQLModel + PostgreSQL (uv)
 frontend/  React + Vite + Tailwind
 scripts/   setup_db.ps1 (전용 DB 계정 만들기)
+clients/   python/jb_usage.py (다른 프로젝트에서 사용량 보내기)
 docs/      설계 문서
 ```
 

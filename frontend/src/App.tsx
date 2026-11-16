@@ -11,17 +11,6 @@ const navClass = ({ isActive }: { isActive: boolean }) =>
       : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
   }`;
 
-function Upcoming({ label, milestone }: { label: string; milestone: string }) {
-  return (
-    <span
-      className="cursor-not-allowed rounded-md px-3 py-1.5 text-sm text-zinc-400 dark:text-zinc-600"
-      title={`${milestone}에서 추가 예정`}
-    >
-      {label}
-    </span>
-  );
-}
-
 export default function App() {
   const scan = useAsync(() => api.scanStatus(), []);
   const [scanning, setScanning] = useState(false);
@@ -59,7 +48,9 @@ export default function App() {
             <NavLink to="/tasks" className={navClass}>
               작업
             </NavLink>
-            <Upcoming label="사용량" milestone="M4" />
+            <NavLink to="/usage" className={navClass}>
+              사용량
+            </NavLink>
           </nav>
           <div className="ml-auto flex items-center gap-3 text-xs text-zinc-500">
             {scanError ? (
