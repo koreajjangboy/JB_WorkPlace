@@ -90,7 +90,24 @@ def draft_commit_message(repo: str, files: list[dict]) -> tuple[str, float | Non
     if result.returncode != 0 or data.get("is_error") or not text:
         detail = text or (result.stderr or "").strip()[-300:] or f"종료 코드 {result.returncode}"
         raise CommitMessageError(f"메시지를 만들지 못했습니다: {detail}")
+    usage = data.get("usage") or {}
+    _last.clear()
+    _last.update(
+        model=next(iter(data.get("modelUsage") or {}), None),
+        input_tokens=int(usage.get("input_tokens") or 0),
+        output_tokens=int(usage.get("output_tokens") or 0),
+        cache_write_tokens=int(usage.get("cache_creation_input_tokens") or 0),
+        cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
+    )
     message = extract_commit_message(text) or text.strip().strip("`").strip()
     # 지시를 어기고 Claude 공동 작성자 줄을 붙였으면 뺀다 (커밋은 사람이 승인해서 하는 것).
     lines = [line for line in message.splitlines() if not _CLAUDE_TRAILER.match(line.strip())]
     return "\n".join(lines).strip(), data.get("total_cost_usd")
+
+
+def last_usage() -> dict:
+    """가장 최근 draft_commit_message 실행의 토큰 사용량 (사용량 기록용)."""
+    return dict(_last)
+
+
+_last: dict = {}

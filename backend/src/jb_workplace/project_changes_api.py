@@ -4,13 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlmodel import Session
 
-from .commit_message import CommitMessageError, draft_commit_message
+from .commit_message import CommitMessageError, draft_commit_message, last_usage
 from .db import get_session
 from .gitops import GitError, all_changes, as_dict, commit, file_diff
 from .gitops import fetch as git_fetch
 from .gitops import push as git_push
 from .models import Project
 from .sync import refresh_project
+from .usage import UsageIn, record_usage
 from .tasks_api import FileChangeOut
 
 router = APIRouter(prefix="/api/projects/{project_id}")
@@ -78,6 +79,14 @@ def project_commit_message(project_id: int, body: FilesIn, db: Session = Depends
         message, cost = draft_commit_message(repo, [as_dict(c) for c in picked])
     except CommitMessageError as exc:
         raise HTTPException(502, str(exc)) from exc
+    # 세션 기록을 남기지 않는 실행이라 사용량을 직접 기록한다.
+    u = last_usage()
+    record_usage(db, UsageIn(
+        provider="claude", unit="token", model=u.get("model"), project=repo, cost_usd=cost,
+        input_tokens=u.get("input_tokens", 0), output_tokens=u.get("output_tokens", 0),
+        cache_write_tokens=u.get("cache_write_tokens", 0), cache_read_tokens=u.get("cache_read_tokens", 0),
+        source="commit_draft", meta={"purpose": "commit message draft"},
+    ))
     return {"message": message, "cost_usd": cost}
 
 
