@@ -1,5 +1,6 @@
+import { useState, type MouseEvent } from "react";
 import { Link } from "react-router";
-import type { Task } from "../api";
+import { taskApi, type Task } from "../api";
 import { StatusBadge } from "../components";
 import { relativeTime, usd } from "../format";
 
@@ -10,7 +11,70 @@ const COLUMNS: { key: string; title: string; statuses: Task["status"][]; tone: s
   { key: "done", title: "완료", statuses: ["done"], tone: "text-green-700 dark:text-green-400" },
 ];
 
-function Card({ t }: { t: Task }) {
+// 프로젝트 칩 색상. Tailwind가 클래스를 찾을 수 있도록 전체 문자열로 적는다.
+const PROJECT_TONES = [
+  "bg-sky-100 text-sky-800 ring-sky-300 dark:bg-sky-900/50 dark:text-sky-200 dark:ring-sky-700",
+  "bg-violet-100 text-violet-800 ring-violet-300 dark:bg-violet-900/50 dark:text-violet-200 dark:ring-violet-700",
+  "bg-emerald-100 text-emerald-800 ring-emerald-300 dark:bg-emerald-900/50 dark:text-emerald-200 dark:ring-emerald-700",
+  "bg-orange-100 text-orange-800 ring-orange-300 dark:bg-orange-900/50 dark:text-orange-200 dark:ring-orange-700",
+  "bg-pink-100 text-pink-800 ring-pink-300 dark:bg-pink-900/50 dark:text-pink-200 dark:ring-pink-700",
+  "bg-teal-100 text-teal-800 ring-teal-300 dark:bg-teal-900/50 dark:text-teal-200 dark:ring-teal-700",
+  "bg-indigo-100 text-indigo-800 ring-indigo-300 dark:bg-indigo-900/50 dark:text-indigo-200 dark:ring-indigo-700",
+  "bg-lime-100 text-lime-800 ring-lime-300 dark:bg-lime-900/50 dark:text-lime-200 dark:ring-lime-700",
+  "bg-rose-100 text-rose-800 ring-rose-300 dark:bg-rose-900/50 dark:text-rose-200 dark:ring-rose-700",
+  "bg-cyan-100 text-cyan-800 ring-cyan-300 dark:bg-cyan-900/50 dark:text-cyan-200 dark:ring-cyan-700",
+  "bg-fuchsia-100 text-fuchsia-800 ring-fuchsia-300 dark:bg-fuchsia-900/50 dark:text-fuchsia-200 dark:ring-fuchsia-700",
+  "bg-yellow-100 text-yellow-800 ring-yellow-300 dark:bg-yellow-900/50 dark:text-yellow-200 dark:ring-yellow-700",
+];
+const NO_PROJECT_TONE = "bg-zinc-100 text-zinc-600 ring-zinc-300 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700";
+
+/** 프로젝트 ID로 색을 고른다. 같은 프로젝트는 항상 같은 색이 된다. */
+function projectTone(id: number | null): string {
+  if (id == null) return NO_PROJECT_TONE;
+  return PROJECT_TONES[Math.abs(id) % PROJECT_TONES.length];
+}
+
+function RunButton({ t, onStarted }: { t: Task; onStarted?: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function start(e: MouseEvent) {
+    // 카드 전체가 링크라서 상세 페이지로 넘어가지 않도록 막는다.
+    e.preventDefault();
+    e.stopPropagation();
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await taskApi.run(t.id);
+      onStarted?.();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <span className="ml-auto flex shrink-0 items-center gap-1.5">
+      {error && (
+        <span className="max-w-[8rem] truncate text-red-600 dark:text-red-400" title={error}>
+          {error}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={start}
+        disabled={busy}
+        className="inline-flex h-5 items-center rounded bg-blue-600 px-1.5 text-[11px] text-white hover:bg-blue-700 disabled:opacity-60"
+      >
+        {busy ? "시작하는 중…" : "▶ 실행"}
+      </button>
+    </span>
+  );
+}
+
+function Card({ t, onChanged }: { t: Task; onChanged?: () => void }) {
   const accent =
     t.status === "running"
       ? "border-l-blue-500"
@@ -26,22 +90,33 @@ function Card({ t }: { t: Task }) {
       to={`/tasks/${t.id}`}
       className={`block rounded-md border border-l-4 border-zinc-200 bg-white px-3 py-2 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800/60 ${accent}`}
     >
-      <div className="line-clamp-2 text-sm [overflow-wrap:anywhere]">{t.title}</div>
-      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-500">
-        {t.status === "failed" && <StatusBadge status="failed" />}
-        <span className="truncate">{t.project_name}</span>
-        <span>· {relativeTime(t.updated_at)}</span>
-        {t.total_cost_usd != null && <span>· {usd(t.total_cost_usd)}</span>}
+      {/* 1줄: 프로젝트 칩 + 제목 */}
+      <div className="flex min-w-0 items-center gap-1.5" title={t.title}>
+        <span
+          className={`max-w-[45%] shrink-0 truncate rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${projectTone(t.project_id)}`}
+        >
+          {t.project_name ?? "프로젝트 미연결"}
+        </span>
+        <span className="min-w-0 truncate text-sm">{t.title}</span>
       </div>
-      {t.status === "failed" && t.last_run?.error && (
-        <div className="mt-1 line-clamp-2 text-[11px] text-red-600 dark:text-red-400">{t.last_run.error}</div>
-      )}
+      {/* 2줄: 상태 · 시간 · 비용 (실패 사유 또는 실행 버튼) */}
+      <div className="mt-1 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-zinc-500">
+        {t.status === "failed" && <StatusBadge status="failed" />}
+        <span>{relativeTime(t.updated_at)}</span>
+        {t.total_cost_usd != null && <span>· {usd(t.total_cost_usd)}</span>}
+        {t.status === "failed" && t.last_run?.error && (
+          <span className="min-w-0 truncate text-red-600 dark:text-red-400" title={t.last_run.error}>
+            · {t.last_run.error}
+          </span>
+        )}
+        {t.status === "todo" && <RunButton t={t} onStarted={onChanged} />}
+      </div>
     </Link>
   );
 }
 
 /** 작업 칸반 보드: 할 일 → 실행 중 → 리뷰·실패 → 완료 */
-export default function TaskBoard({ tasks }: { tasks: Task[] }) {
+export default function TaskBoard({ tasks, onChanged }: { tasks: Task[]; onChanged?: () => void }) {
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {COLUMNS.map((col) => {
@@ -56,7 +131,7 @@ export default function TaskBoard({ tasks }: { tasks: Task[] }) {
               {items.length === 0 ? (
                 <p className="px-1 py-4 text-center text-xs text-zinc-400">없음</p>
               ) : (
-                items.map((t) => <Card key={t.id} t={t} />)
+                items.map((t) => <Card key={t.id} t={t} onChanged={onChanged} />)
               )}
             </div>
           </section>
