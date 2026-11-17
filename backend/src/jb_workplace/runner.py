@@ -497,9 +497,21 @@ def recover_orphans() -> None:
             run.ended_at = _now()
             db.add(run)
             task = db.get(Task, run.task_id)
-            if task and task.status == "running":
-                task.status = "failed"
+            if task:
+                # [이어서 계속]과 "터미널에서 이어서 하기"가 이 세션을 쓸 수 있게 작업에도 남긴다.
+                if run.session_id:
+                    task.session_id = run.session_id
+                if task.status == "running":
+                    task.status = "failed"
                 task.updated_at = _now()
+                db.add(task)
+        # 예전에 이 처리가 없어서 세션이 비어 있는 작업은 마지막 실행의 세션으로 채운다.
+        for task in db.exec(select(Task).where(Task.session_id == None)).all():  # noqa: E711
+            last = db.exec(
+                select(Run).where(Run.task_id == task.id, Run.session_id != None).order_by(Run.id.desc()).limit(1)  # noqa: E711
+            ).first()
+            if last:
+                task.session_id = last.session_id
                 db.add(task)
         db.commit()
         if runs:

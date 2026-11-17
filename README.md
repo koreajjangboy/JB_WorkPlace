@@ -145,6 +145,8 @@ cd frontend; npm run dev
 
 - 백엔드: http://127.0.0.1:8000 (API는 `/api/...`, 문서는 `/docs`)
 - 두 서버 모두 이 PC(127.0.0.1)에서만 접속할 수 있다.
+- 백엔드 자동 재시작(reload)은 기본으로 꺼져 있다. WorkPlace 작업이 WorkPlace 자신의 코드를 고치면 서버가 재시작되면서 그 작업이 끊기기 때문이다.
+  그래서 백엔드 코드가 바뀌면 서버를 직접 다시 시작해야 반영된다. 개발 중에만 `$env:JB_WORKPLACE_RELOAD="1"; uv run jb-workplace`로 켠다.
 
 ## 설정 (`backend/.env`)
 
