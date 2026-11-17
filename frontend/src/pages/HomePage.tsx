@@ -75,8 +75,6 @@ export default function HomePage() {
 
       <CalendarSection />
 
-      <UsageSection days={days} onDaysChange={setDays} />
-
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <Card
           title="주목할 작업"
@@ -96,6 +94,8 @@ export default function HomePage() {
           <RateLimitView data={rateLimit} />
         </Card>
       </div>
+
+      <UsageSection days={days} onDaysChange={setDays} />
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <Card title="최근 세션" action={<span className="text-xs text-zinc-500">모든 프로젝트</span>}>
