@@ -24,7 +24,7 @@ from sqlmodel import Session, select
 
 from .config import get_settings
 from .db import engine
-from .gitops import GitError, snapshot
+from .gitops import GitError, is_repo, snapshot
 from .models import Project, RateLimitSnapshot, Run, RunEvent, Task
 from .scanner.sessions import TOOL_INPUT_LIMIT, TOOL_RESULT_LIMIT, TEXT_LIMIT, _text_of, _truncate
 
@@ -139,7 +139,7 @@ def start_run(task_id: int, prompt: str | None = None) -> Run:
             if not text:
                 raise RunnerError("지시 내용을 입력하세요")
 
-            if task.baseline is None:
+            if task.baseline is None and is_repo(project.path):
                 # 첫 실행 직전의 변경 상태를 기록해 두고, 나중에 이 작업이 바꾼 파일만 가려낸다.
                 try:
                     task.baseline = snapshot(project.path)

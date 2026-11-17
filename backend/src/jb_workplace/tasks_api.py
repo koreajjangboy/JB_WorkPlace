@@ -12,7 +12,7 @@ from sqlmodel import Session, select
 from .config import get_settings
 from .db import engine, get_session
 from .models import Project, RateLimitSnapshot, Run, RunEvent, Task
-from .gitops import GitError, as_dict, commit, file_diff, revert, revertable, task_changes
+from .gitops import NOT_REPO_HINT, GitError, as_dict, commit, file_diff, is_repo, revert, revertable, task_changes
 from .gitops import push as git_push
 from .sync import refresh_project
 from .usage import UsageIn, record_usage
@@ -421,8 +421,11 @@ def _project_repo(db: Session, task: Task) -> str:
 
 
 def _changes(db: Session, task: Task) -> list:
+    repo = _project_repo(db, task)
+    if not is_repo(repo):
+        raise HTTPException(409, f"이 프로젝트 폴더({repo})는 {NOT_REPO_HINT}")
     try:
-        return task_changes(_project_repo(db, task), task.baseline)
+        return task_changes(repo, task.baseline)
     except GitError as exc:
         raise HTTPException(409, f"변경 사항을 읽지 못했습니다: {exc}") from exc
 

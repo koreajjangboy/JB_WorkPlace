@@ -21,8 +21,25 @@ class GitError(Exception):
     pass
 
 
+def _env(repo: str, **extra: str) -> dict[str, str]:
+    """git 환경. 프로젝트 폴더 위로는 저장소를 찾지 않는다 (GIT_CEILING_DIRECTORIES).
+
+    git 저장소가 아닌 폴더에서 git은 상위 폴더로 올라가며 저장소를 찾는다. 실수로 드라이브 맨 위(C:\\)에
+    만들어진 .git 같은 엉뚱한 저장소를 잡으면 드라이브 전체를 그 프로젝트의 변경 사항으로 보게 된다.
+    """
+    return {**os.environ, "GIT_CEILING_DIRECTORIES": str(Path(repo).resolve().parent), **extra}
+
+
+def is_repo(path: str) -> bool:
+    """이 폴더 자체가 git 저장소인가 (.git 폴더, 또는 워크트리의 .git 파일)."""
+    return (Path(path) / ".git").exists()
+
+
+NOT_REPO_HINT = "git 저장소가 아니라 변경 사항을 추적할 수 없습니다. 변경을 보고 커밋하려면 그 폴더에서 `git init`을 실행하세요."
+
+
 def _git(repo: str, *args: str, stdin: str | None = None, check: bool = True) -> str:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"}
+    env = _env(repo, GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
     try:
         result = subprocess.run(
             ["git", "-c", "core.quotepath=off", "-C", repo, *args],
@@ -240,6 +257,7 @@ def _in_head(repo: str, path: str) -> bool:
     return bool(_has_head(repo)) and subprocess.run(
         ["git", "-C", repo, "cat-file", "-e", f"HEAD:{path}"],
         capture_output=True,
+        env=_env(repo),
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     ).returncode == 0
 
@@ -282,6 +300,7 @@ def revert(repo: str, baseline: dict[str, dict[str, str]], changes: list["FileCh
             result = subprocess.run(
                 ["git", "-C", repo, "cat-file", "blob", before["hash"]],
                 capture_output=True,
+                env=_env(repo),
                 timeout=GIT_TIMEOUT,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
@@ -294,7 +313,7 @@ def revert(repo: str, baseline: dict[str, dict[str, str]], changes: list["FileCh
 
 
 def fetch(repo: str) -> str:
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
+    env = _env(repo, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never")
     try:
         result = subprocess.run(
             ["git", "-C", repo, "fetch", "--prune"],
@@ -334,7 +353,7 @@ def push(repo: str) -> str:
         if "origin" not in remotes:
             raise GitError("원격 저장소(origin)가 없습니다. GitHub 저장소를 먼저 연결하세요.")
         args = ["push", "-u", "origin", branch]
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
+    env = _env(repo, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never")
     try:
         result = subprocess.run(
             ["git", "-C", repo, *args],

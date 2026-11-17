@@ -6,7 +6,7 @@ from sqlmodel import Session
 
 from .commit_message import CommitMessageError, draft_commit_message, last_usage
 from .db import get_session
-from .gitops import GitError, all_changes, as_dict, commit, file_diff
+from .gitops import NOT_REPO_HINT, GitError, all_changes, as_dict, commit, file_diff, is_repo
 from .gitops import fetch as git_fetch
 from .gitops import push as git_push
 from .models import Project
@@ -45,6 +45,8 @@ def _repo(db: Session, project_id: int) -> str:
 
 
 def _changes(repo: str):
+    if not is_repo(repo):
+        raise HTTPException(409, f"이 프로젝트 폴더({repo})는 {NOT_REPO_HINT}")
     try:
         return all_changes(repo)
     except GitError as exc:
