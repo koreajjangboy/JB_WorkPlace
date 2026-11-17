@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { Badge, Button, Card, Empty, ErrorBox, Loading } from "../components";
 import { relativeTime } from "../format";
 import { useAsync } from "../useAsync";
-import { UNIT_LABEL, serviceApi, type CatalogItem, type ServiceStatus } from "../usage";
+import { UNIT_LABEL, serviceApi, takeoutApi, type CatalogItem, type ServiceStatus, type TakeoutImport } from "../usage";
 
 const KINDS: [string, string][] = [
   ["text", "텍스트"],
@@ -17,6 +17,7 @@ const COLLECTION: Record<string, string> = {
   claude_logs: "자동 (Claude Code 세션 기록)",
   app: "앱에서 기록 (jb_usage)",
   manual: "직접 입력",
+  takeout: "Google Takeout 파일 (Gemini 앱)",
 };
 const input = "h-8 rounded-md border border-zinc-300 bg-white px-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
 
@@ -37,6 +38,7 @@ function snippet(s: ServiceStatus): string {
 
 function Status({ s }: { s: ServiceStatus }) {
   if (s.collection === "claude_logs") return <Badge tone="green">자동 수집</Badge>;
+  if (s.collection === "takeout") return s.records > 0 ? <Badge tone="green">Takeout 가져옴</Badge> : <Badge tone="amber">아직 가져오지 않음</Badge>;
   if (s.records_7d > 0) return <Badge tone="green">기록 중</Badge>;
   if (s.records > 0) return <Badge tone="amber">최근 7일 기록 없음</Badge>;
   if (s.collection === "manual") return <Badge>직접 입력</Badge>;
@@ -82,6 +84,109 @@ function ManualForm({ s, onDone }: { s: ServiceStatus; onDone: () => void }) {
       </div>
       {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
       {msg && !error && <p className="text-xs text-green-700 dark:text-green-400">{msg}</p>}
+    </div>
+  );
+}
+
+/** Gemini 앱: Google Takeout 파일을 올리거나 지켜보는 폴더에서 가져온다. */
+function TakeoutPanel({ onDone }: { onDone: () => void }) {
+  const st = useAsync(() => takeoutApi.status(), []);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [guide, setGuide] = useState(false);
+
+  const describe = (r: TakeoutImport) =>
+    `${r.file}: ${r.first} ~ ${r.last}, ${r.days}일 · 대화 ${r.prompts.toLocaleString()}회 · 약 ${r.tokens.toLocaleString()} 토큰`;
+
+  async function run(job: () => Promise<string>) {
+    setBusy(true);
+    setError(null);
+    setMsg(null);
+    try {
+      setMsg(await job());
+      st.reload();
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const upload = (file: File) => run(async () => `가져왔습니다 — ${describe(await takeoutApi.upload(file))}`);
+  const scan = () =>
+    run(async () => {
+      const r = await takeoutApi.scan();
+      return r.imported.length
+        ? `새 파일 ${r.imported.length}개를 가져왔습니다 — ${r.imported.map(describe).join(" / ")}`
+        : "새 Takeout 파일이 없습니다";
+    });
+
+  const last = st.data?.last_import;
+  const dirs = st.data?.dirs.filter((d, i) => d.exists || i === 0) ?? [];
+  return (
+    <div className="mt-2 space-y-1.5 text-xs">
+      <p className="text-zinc-600 dark:text-zinc-400">
+        Gemini 앱에는 사용량 API가 없어서, Google Takeout으로 내보낸 활동 기록의 글자 수로 토큰을 <b>추정</b>합니다.
+        {last ? (
+          <>
+            {" "}
+            마지막 가져오기 {relativeTime(last.imported_at)} ({last.first} ~ {last.last}).
+          </>
+        ) : (
+          " 아직 가져온 파일이 없습니다."
+        )}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <label
+          className={`cursor-pointer rounded-md border border-zinc-300 px-2 py-1 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800 ${busy ? "pointer-events-none opacity-50" : ""}`}
+        >
+          {busy ? "가져오는 중…" : "Takeout 파일 올리기"}
+          <input
+            type="file"
+            accept=".zip,.json"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) upload(f);
+            }}
+          />
+        </label>
+        <button onClick={scan} disabled={busy} className="text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400">
+          폴더 지금 확인
+        </button>
+        <button onClick={() => setGuide(!guide)} className="text-blue-600 hover:underline dark:text-blue-400">
+          {guide ? "안내 닫기" : "자동으로 받는 방법"}
+        </button>
+      </div>
+      <p className="text-[11px] text-zinc-500">지켜보는 폴더 (10분마다 takeout-*.zip 확인): {dirs.map((d) => d.path).join(", ")}</p>
+      {msg && <p className="text-green-700 dark:text-green-400">{msg}</p>}
+      {error && <p className="text-red-600 dark:text-red-400">{error}</p>}
+      {guide && (
+        <ol className="list-decimal space-y-0.5 rounded bg-zinc-50 p-2 pl-6 text-zinc-600 dark:bg-zinc-950 dark:text-zinc-400">
+          <li>
+            <a href="https://takeout.google.com" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline dark:text-blue-400">
+              takeout.google.com
+            </a>
+            에서 <b>모두 선택 해제</b> → <b>내 활동</b>만 선택
+          </li>
+          <li>
+            "모든 활동 데이터 포함됨" → <b>Gemini 앱</b>만 선택, "여러 형식" → 활동 기록 형식을 <b>JSON</b>으로 변경
+          </li>
+          <li>
+            전송 방법 <b>Drive에 추가</b>, 빈도 <b>2개월마다 내보내기(1년)</b>, 파일 형식 .zip → 내보내기 만들기
+          </li>
+          <li>
+            PC에 <b>Google Drive 데스크톱</b>을 설치해 두면 <code className="font-mono">G:\내 드라이브\Takeout</code>에 zip이 생기고 WorkPlace가 자동으로 가져옵니다
+          </li>
+          <li>그보다 자주 보고 싶으면 Takeout에서 한 번만 내보내기를 해서 받은 zip을 다운로드 폴더에 두거나 여기에 올리면 됩니다</li>
+          <li>
+            Gemini 설정의 <b>Gemini 앱 활동</b>이 켜져 있어야 기록이 남습니다
+          </li>
+        </ol>
+      )}
     </div>
   );
 }
@@ -152,7 +257,9 @@ function ServiceCard({ s, onChanged }: { s: ServiceStatus; onChanged: () => void
         )}
       </div>
 
-      {s.collection !== "claude_logs" && (
+      {s.collection === "takeout" && <TakeoutPanel onDone={onChanged} />}
+
+      {s.collection !== "claude_logs" && s.collection !== "takeout" && (
         <div className="mt-2 text-xs">
           {s.used_in.length === 0 ? (
             <span className="text-zinc-500">코드에서 이 서비스를 쓰는 프로젝트를 찾지 못했습니다.</span>

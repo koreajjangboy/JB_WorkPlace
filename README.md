@@ -102,6 +102,10 @@ record_gemini(response)                       # google-genai 응답의 토큰 �
 - 서비스마다 연결 방법과 복사할 코드, 아직 연결되지 않은 프로젝트(호출 파일)를 보여준다
 - 연결하기 어려운 서비스는 날짜·비용·사용량을 직접 입력한다 (예: 월 청구서)
 - Gemini 같은 서비스는 각 프로젝트가 `record_gemini(response)`로 보내야 기록된다 (Google 쪽에는 간단한 사용량 API가 없다)
+- **Gemini 앱(웹·모바일)**: Google Takeout의 '내 활동 → Gemini 앱'(형식 JSON) 내보내기에서 질문·답의 글자 수로 토큰을 **추정**한다
+  - 설정 화면에서 zip을 올리거나, `TAKEOUT_DIRS` 폴더(기본: 다운로드, `G:\내 드라이브\Takeout`)에 생긴 `takeout-*.zip`을 10분마다 자동으로 가져온다
+  - 자동화: Takeout 예약 내보내기(2개월마다, Drive로 전송) + Google Drive 데스크톱 동기화
+  - 다시 가져오면 그 파일이 담은 기간만 새 값으로 바꾼다. 구독형이라 금액은 단가를 넣어야 API 환산값으로 보인다
 
 WorkPlace 서버가 꺼져 있어도 앱은 그대로 동작한다 (기록만 빠진다). 주소는 `JB_WORKPLACE_URL`, 프로젝트 이름은 `JB_WORKPLACE_PROJECT`로 바꿀 수 있다.
 
