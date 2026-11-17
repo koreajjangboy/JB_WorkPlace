@@ -515,3 +515,21 @@ def billing_sync(full: bool = False) -> dict:
     from . import billing
 
     return {**billing.status(), "result": billing.sync_safely(full)}
+
+
+# ---------------------------------------------------------------- OpenAI (조직 Usage·Costs API)
+
+
+@router.get("/openai")
+def openai_status() -> dict:
+    from . import openai_usage
+
+    return openai_usage.status()
+
+
+@router.post("/openai/sync")
+def openai_sync(full: bool | None = None) -> dict:
+    """OpenAI 사용량을 지금 가져온다. full=true면 180일."""
+    from . import openai_usage
+
+    return {**openai_usage.status(), "result": openai_usage.sync_safely(full)}

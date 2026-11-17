@@ -86,6 +86,11 @@ class Settings(BaseSettings):
     # 몇 시간마다 가져올지
     gcp_billing_sync_hours: int = 6
 
+    # ---- OpenAI (조직 Usage·Costs API) ----
+    # platform.openai.com/settings/organization/admin-keys 에서 만든 Admin API 키 (sk-admin-…). 읽기 전용으로 만든다.
+    openai_admin_key: str = ""
+    openai_sync_hours: int = 6
+
     @property
     def billing_tables(self) -> list[str]:
         return [t.strip().strip("`") for t in self.gcp_billing_tables.split(",") if t.strip()]

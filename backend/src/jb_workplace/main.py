@@ -38,6 +38,9 @@ async def lifespan(app: FastAPI):
     from .billing import watch_forever as watch_billing
 
     threading.Thread(target=watch_billing, daemon=True).start()  # Google Cloud 결제 내보내기
+    from .openai_usage import watch_forever as watch_openai
+
+    threading.Thread(target=watch_openai, daemon=True).start()  # OpenAI 조직 사용량
     yield
 
 

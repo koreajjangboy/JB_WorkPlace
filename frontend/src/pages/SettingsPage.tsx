@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { Badge, Button, Card, Empty, ErrorBox, Loading } from "../components";
 import { relativeTime } from "../format";
 import { useAsync } from "../useAsync";
-import { UNIT_LABEL, billingApi, serviceApi, takeoutApi, type BillingStatus, type CatalogItem, type ServiceStatus, type TakeoutImport } from "../usage";
+import { UNIT_LABEL, billingApi, openaiApi, serviceApi, takeoutApi, type BillingStatus, type CatalogItem, type OpenAIStatus, type ServiceStatus, type TakeoutImport } from "../usage";
 
 const KINDS: [string, string][] = [
   ["text", "텍스트"],
@@ -236,11 +236,85 @@ function BillingPanel({ billing, onDone }: { billing: BillingStatus; onDone: () 
   );
 }
 
-function ServiceCard({ s, onChanged, billing }: { s: ServiceStatus; onChanged: () => void; billing?: BillingStatus }) {
+/** OpenAI: 조직 Usage·Costs API (Admin 키)에서 실제 비용과 토큰을 가져온다. */
+function OpenAIPanel({ st, onDone }: { st: OpenAIStatus; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [guide, setGuide] = useState(!st.configured);
+  const last = st.last_sync;
+
+  async function sync() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await openaiApi.sync();
+      if (r.result.error) setError(r.result.error);
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-2 space-y-1 rounded-md bg-zinc-50 p-2 text-xs dark:bg-zinc-950">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">OpenAI 조직 사용량 API</span>
+        {!st.configured ? (
+          <Badge tone="amber">키 없음</Badge>
+        ) : last?.error ? (
+          <Badge tone="red">오류</Badge>
+        ) : last ? (
+          <Badge tone="green">연결됨</Badge>
+        ) : (
+          <Badge>확인 전</Badge>
+        )}
+        {st.configured && (
+          <button onClick={sync} disabled={busy} className="ml-auto text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400">
+            {busy ? "가져오는 중…" : "지금 가져오기"}
+          </button>
+        )}
+      </div>
+      <p className="text-zinc-600 dark:text-zinc-400">
+        실제 청구 금액과 모델별 토큰을 {st.sync_hours}시간마다 날짜·프로젝트별로 가져옵니다. 코드는 고치지 않아도 됩니다.
+        {last && !last.error && (
+          <>
+            {" "}
+            마지막 확인 {relativeTime(last.at)}
+            {last.first ? ` · ${last.first} ~ ${last.last}, ${(last.cost_usd ?? 0).toFixed(2)}, ${(last.tokens ?? 0).toLocaleString()} 토큰` : " · 최근 사용 내역 없음"}.
+          </>
+        )}
+      </p>
+      {(error || last?.error) && <p className="text-red-600 dark:text-red-400">{error || last?.error}</p>}
+      <button onClick={() => setGuide(!guide)} className="text-blue-600 hover:underline dark:text-blue-400">
+        {guide ? "안내 닫기" : "연결 방법"}
+      </button>
+      {guide && (
+        <ol className="list-decimal space-y-0.5 pl-5 text-zinc-600 dark:text-zinc-400">
+          <li>
+            <a href="https://platform.openai.com/settings/organization/admin-keys" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline dark:text-blue-400">
+              platform.openai.com → 조직 설정 → Admin keys
+            </a>
+            에서 <b>Create new admin key</b> (조직 Owner만 가능), 권한은 <b>Read only</b>
+          </li>
+          <li>
+            <code className="font-mono">backend\.env</code>에 <code className="font-mono">OPENAI_ADMIN_KEY=sk-admin-…</code> 한 줄 추가
+          </li>
+          <li>백엔드를 다시 시작하면 처음 180일을 가져오고, 이후 {st.sync_hours}시간마다 최근 40일을 다시 읽습니다</li>
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function ServiceCard({ s, onChanged, billing, openai }: { s: ServiceStatus; onChanged: () => void; billing?: BillingStatus; openai?: OpenAIStatus }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const missing = s.used_in.filter((u) => !s.reporting_projects.includes(u.project));
+  // 서비스 API(결제 내보내기·OpenAI 조직 사용량)로 가져오면 코드에 jb_usage를 붙일 필요가 없다.
+  const viaApi = !!billing || !!openai?.configured;
 
   async function patch(change: Parameters<typeof serviceApi.update>[1]) {
     setError(null);
@@ -304,8 +378,9 @@ function ServiceCard({ s, onChanged, billing }: { s: ServiceStatus; onChanged: (
 
       {s.collection === "takeout" && <TakeoutPanel onDone={onChanged} />}
       {billing && <BillingPanel billing={billing} onDone={onChanged} />}
+      {openai && <OpenAIPanel st={openai} onDone={onChanged} />}
 
-      {s.collection !== "claude_logs" && s.collection !== "takeout" && (
+      {s.collection !== "claude_logs" && s.collection !== "takeout" && !viaApi && (
         <div className="mt-2 text-xs">
           {s.used_in.length === 0 ? (
             <span className="text-zinc-500">코드에서 이 서비스를 쓰는 프로젝트를 찾지 못했습니다.</span>
@@ -333,7 +408,7 @@ function ServiceCard({ s, onChanged, billing }: { s: ServiceStatus; onChanged: (
       )}
 
       <div className="mt-2 flex flex-wrap gap-3 text-xs">
-        {s.collection === "app" && (
+        {s.collection === "app" && !viaApi && (
           <button onClick={copy} className="text-blue-600 hover:underline dark:text-blue-400">
             {copied ? "복사했습니다" : "연결 코드 복사"}
           </button>
@@ -345,7 +420,7 @@ function ServiceCard({ s, onChanged, billing }: { s: ServiceStatus; onChanged: (
 
       {open && (
         <div className="mt-3 space-y-3 border-t border-zinc-100 pt-3 dark:border-zinc-800">
-          {s.collection === "app" && (
+          {s.collection === "app" && !viaApi && (
             <div>
               <div className="mb-1 text-xs font-medium">연결 방법</div>
               <ol className="mb-1 list-decimal space-y-0.5 pl-4 text-xs text-zinc-600 dark:text-zinc-400">
@@ -490,6 +565,7 @@ function AddService({ catalog, onAdded }: { catalog: CatalogItem[]; onAdded: () 
 export default function SettingsPage() {
   const status = useAsync(() => serviceApi.status(false), []);
   const billing = useAsync(() => billingApi.status(), []);
+  const openai = useAsync(() => openaiApi.status(), []);
   const catalog = useAsync(() => serviceApi.catalog(), []);
   const [scanning, setScanning] = useState(false);
 
@@ -506,6 +582,7 @@ export default function SettingsPage() {
   function reloadAll() {
     status.reload();
     billing.reload();
+    openai.reload();
     catalog.reload();
   }
 
@@ -540,6 +617,7 @@ export default function SettingsPage() {
               key={s.id}
               s={s}
               onChanged={reloadAll}
+              openai={s.name === "openai" ? openai.data ?? undefined : undefined}
               billing={billing.data && billing.data.tables.length > 0 && Object.values(billing.data.services).includes(s.name) ? billing.data : undefined}
             />
           ))}

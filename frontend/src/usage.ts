@@ -173,3 +173,12 @@ export const billingApi = {
   status: () => request<BillingStatus>("/api/usage/billing"),
   sync: (full = false) => request<BillingStatus & { result: BillingSync }>(`/api/usage/billing/sync?full=${full}`, { method: "POST" }),
 };
+
+export type OpenAISync = { at: string; error: string | null; days?: number; cost_records?: number; usage_records?: number; cost_usd?: number; tokens?: number; first?: string | null; last?: string | null };
+export type OpenAIStatus = { configured: boolean; sync_hours: number; last_sync: OpenAISync | null };
+
+/** OpenAI 조직 Usage·Costs API */
+export const openaiApi = {
+  status: () => request<OpenAIStatus>("/api/usage/openai"),
+  sync: (full?: boolean) => request<OpenAIStatus & { result: OpenAISync }>(`/api/usage/openai/sync${full == null ? "" : `?full=${full}`}`, { method: "POST" }),
+};

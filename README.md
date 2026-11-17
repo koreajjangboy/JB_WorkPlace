@@ -105,6 +105,8 @@ record_gemini(response)                       # google-genai 응답의 토큰 �
 - **Gemini API (Google Cloud 결제 내보내기 → BigQuery)**: `GCP_BILLING_TABLES`에 내보내기 테이블을 적으면 6시간마다 크레딧을 뺀 실제 청구 금액을 날짜·GCP 프로젝트·모델(SKU)별로 가져온다
   - 인증은 `gcloud auth application-default login` (ADC). 테이블의 환율로 달러로 바꾼다. 최근 40일은 매번 다시 읽어 고쳐진 금액을 반영한다
   - Billing 보고서 CSV로 넣어 둔 기간(`covered_until`)은 두 번 세지 않도록 건너뛴다
+- **OpenAI API (조직 Usage·Costs API)**: `OPENAI_ADMIN_KEY`(platform.openai.com 조직 설정 → Admin keys, Read only)를 넣으면 6시간마다 실제 비용(프로젝트·항목별)과 모델별 토큰을 가져온다
+  - 처음에는 180일, 이후에는 최근 40일을 다시 읽는다. 토큰 기록은 비용 0으로 두어 금액은 비용 기록에서만 센다
 - **Gemini 앱(웹·모바일)**: Google Takeout의 '내 활동 → Gemini 앱'(형식 JSON) 내보내기에서 질문·답의 글자 수로 토큰을 **추정**한다
   - 설정 화면에서 zip을 올리거나, `TAKEOUT_DIRS` 폴더(기본: 다운로드, `G:\내 드라이브\Takeout`)에 생긴 `takeout-*.zip`을 10분마다 자동으로 가져온다
   - 자동화: Takeout 예약 내보내기(2개월마다, Drive로 전송) + Google Drive 데스크톱 동기화
