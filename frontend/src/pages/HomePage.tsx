@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router";
 import { api, taskApi } from "../api";
+import CalendarSection from "../CalendarSection";
 import { Card, Empty, ErrorBox, Loading, SessionRow, Stat } from "../components";
 import { relativeTime } from "../format";
 import { RateLimitView } from "../limits";
@@ -71,6 +72,8 @@ export default function HomePage() {
         />
         <Stat label="저장 안 된 변경" value={dirtyTotal} hint={`push 안 된 커밋 ${unpushed}개`} />
       </div>
+
+      <CalendarSection />
 
       <UsageSection days={days} onDaysChange={setDays} />
 

@@ -166,3 +166,6 @@ cd frontend; npm run dev
 | `RUNNER_MODEL` | (기본 모델) | 실행에 쓸 모델 (예: `sonnet`, `opus`) |
 | `COMMIT_MESSAGE_MODEL` | `sonnet` | 커밋 메시지 초안을 쓸 모델 |
 | `COMMIT_MESSAGE_BUDGET_USD` | `0.5` | 커밋 메시지 초안 1회 비용 상한 |
+| `GOOGLE_CALENDAR_ICS_URLS` | (없음) | 홈 화면에 보여줄 Google 캘린더의 "iCal 형식의 비공개 주소". 쉼표로 여러 개 |
+| `CALENDAR_TIMEZONE` | `Asia/Seoul` | 일정 시각을 보여줄 시간대 |
+| `CALENDAR_CACHE_SECONDS` | `300` | 받아 온 캘린더를 다시 받기 전까지 쓰는 시간(초). [새로고침]은 바로 다시 받음 |

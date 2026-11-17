@@ -50,6 +50,28 @@ class Settings(BaseSettings):
     commit_message_model: str = "sonnet"
     commit_message_budget_usd: float = 0.5
 
+    # ---- Google 캘린더 ----
+    # 캘린더 설정 > 캘린더 통합 > "iCal 형식의 비공개 주소". 쉼표로 여러 개 지정.
+    google_calendar_ics_urls: str = ""
+    # 일정 시간을 이 시간대로 바꿔 보여준다.
+    calendar_timezone: str = "Asia/Seoul"
+    # 받아 온 캘린더를 다시 받기 전까지 쓰는 시간(초)
+    calendar_cache_seconds: int = 300
+
+    @property
+    def calendar_urls(self) -> list[str]:
+        return [u.strip() for u in self.google_calendar_ics_urls.split(",") if u.strip()]
+
+    # ---- Google 캘린더 ----
+    # 캘린더 설정 > 캘린더 통합 > "iCal 형식의 비공개 주소". 쉼표로 여러 개 지정.
+    google_calendar_ics_urls: str = ""
+    # 일정을 보여줄 시간대
+    calendar_timezone: str = "Asia/Seoul"
+
+    @property
+    def calendar_ics_urls(self) -> list[str]:
+        return [u.strip() for u in self.google_calendar_ics_urls.split(",") if u.strip()]
+
     @property
     def scan_root_paths(self) -> list[Path]:
         return [Path(p.strip()) for p in self.scan_roots.split(",") if p.strip()]
