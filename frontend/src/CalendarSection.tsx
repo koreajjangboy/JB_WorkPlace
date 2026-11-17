@@ -31,7 +31,8 @@ export const calendarApi = {
 };
 
 const WEEK = ["일", "월", "화", "수", "목", "금", "토"];
-const MAX_CHIPS = 3;
+const DAYS = 7; // 오늘부터 7일
+const MAX_CHIPS = 5;
 
 function ymd(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -60,17 +61,14 @@ function eventTime(e: CalendarEvent, day: string) {
 
 export default function CalendarSection() {
   const today = ymd(new Date());
-  const [month, setMonth] = useState(() => {
-    const d = new Date();
-    return new Date(d.getFullYear(), d.getMonth(), 1);
-  });
+  // 오늘 기준 몇 번째 7일 구간인지 (0 = 오늘부터 7일)
+  const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState(today);
 
-  // 달력은 일요일부터 6주(42칸)를 보여준다.
-  const gridStart = addDays(month, -month.getDay());
-  const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
+  const base = new Date(`${today}T00:00:00`);
+  const days = Array.from({ length: DAYS }, (_, i) => addDays(base, offset * DAYS + i));
   const from = ymd(days[0]);
-  const to = ymd(days[41]);
+  const to = ymd(days[DAYS - 1]);
 
   const forceRef = useRef(false);
   const { data, error, loading, reload } = useAsync(() => {
@@ -98,25 +96,31 @@ export default function CalendarSection() {
     return map;
   }, [data, from, to]);
 
-  const move = (n: number) => setMonth((m) => new Date(m.getFullYear(), m.getMonth() + n, 1));
+  const move = (n: number) => {
+    const next = offset + n;
+    setOffset(next);
+    // 선택한 날도 새 구간의 첫날(이번 구간이면 오늘)로 옮긴다.
+    setSelected(ymd(addDays(base, next * DAYS)));
+  };
   const goToday = () => {
-    const d = new Date();
-    setMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+    setOffset(0);
     setSelected(today);
   };
+  const first = days[0];
+  const last = days[DAYS - 1];
 
   const selectedEvents = byDay.get(selected) ?? [];
   const selDate = new Date(`${selected}T00:00:00`);
 
   const header = (
     <div className="flex items-center gap-1.5">
-      <button onClick={() => move(-1)} className="h-7 w-7 rounded-md text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800" aria-label="이전 달">
+      <button onClick={() => move(-1)} className="h-7 w-7 rounded-md text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800" aria-label="이전 7일">
         ‹
       </button>
-      <span className="min-w-[6.5rem] text-center text-sm font-medium tabular-nums">
-        {month.getFullYear()}년 {month.getMonth() + 1}월
+      <span className="min-w-[8rem] text-center text-sm font-medium tabular-nums">
+        {first.getMonth() + 1}/{first.getDate()} – {last.getMonth() + 1}/{last.getDate()}
       </span>
-      <button onClick={() => move(1)} className="h-7 w-7 rounded-md text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800" aria-label="다음 달">
+      <button onClick={() => move(1)} className="h-7 w-7 rounded-md text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800" aria-label="다음 7일">
         ›
       </button>
       <button onClick={goToday} className="ml-1 h-7 rounded-md border border-zinc-300 px-2 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800">
@@ -146,17 +150,19 @@ export default function CalendarSection() {
         {/* 달력 */}
         <div className={loading && !data ? "opacity-60" : ""}>
           <div className="grid grid-cols-7 text-center text-[11px] text-zinc-500">
-            {WEEK.map((w, i) => (
-              <div key={w} className={`py-1 ${i === 0 ? "text-red-500" : i === 6 ? "text-blue-500" : ""}`}>
-                {w}
-              </div>
-            ))}
+            {days.map((d) => {
+              const dow = d.getDay();
+              return (
+                <div key={ymd(d)} className={`py-1 ${dow === 0 ? "text-red-500" : dow === 6 ? "text-blue-500" : ""}`}>
+                  {WEEK[dow]}
+                </div>
+              );
+            })}
           </div>
           <div className="grid grid-cols-7 overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800">
             {days.map((d, i) => {
               const key = ymd(d);
               const evs = byDay.get(key) ?? [];
-              const inMonth = d.getMonth() === month.getMonth();
               const isToday = key === today;
               const isSel = key === selected;
               const dow = d.getDay();
@@ -164,29 +170,19 @@ export default function CalendarSection() {
                 <button
                   key={key}
                   onClick={() => setSelected(key)}
-                  className={`flex min-h-[5.5rem] flex-col gap-0.5 border-zinc-100 p-1 text-left align-top dark:border-zinc-800 ${
-                    i % 7 !== 0 ? "border-l" : ""
-                  } ${i >= 7 ? "border-t" : ""} ${inMonth ? "" : "bg-zinc-50/70 dark:bg-zinc-950/40"} ${
-                    isSel ? "ring-2 ring-blue-500 ring-inset" : "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
-                  }`}
+                  className={`flex min-h-[9rem] flex-col gap-0.5 border-zinc-100 p-1 text-left align-top dark:border-zinc-800 ${
+                    i !== 0 ? "border-l" : ""
+                  } ${isSel ? "ring-2 ring-blue-500 ring-inset" : "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"}`}
                 >
                   <span
                     className={`inline-flex h-5 min-w-5 items-center justify-center self-start rounded-full px-1 text-[11px] tabular-nums ${
-                      isToday
-                        ? "bg-blue-600 font-semibold text-white"
-                        : !inMonth
-                          ? "text-zinc-400 dark:text-zinc-600"
-                          : dow === 0
-                            ? "text-red-500"
-                            : dow === 6
-                              ? "text-blue-500"
-                              : ""
+                      isToday ? "bg-blue-600 font-semibold text-white" : dow === 0 ? "text-red-500" : dow === 6 ? "text-blue-500" : ""
                     }`}
                   >
-                    {d.getDate()}
+                    {d.getDate() === 1 || i === 0 ? `${d.getMonth() + 1}/${d.getDate()}` : d.getDate()}
                   </span>
                   {evs.slice(0, MAX_CHIPS).map((e) => (
-                    <EventChip key={e.id} e={e} dim={!inMonth} />
+                    <EventChip key={e.id} e={e} dim={false} />
                   ))}
                   {evs.length > MAX_CHIPS && <span className="px-1 text-[10px] text-zinc-500">+{evs.length - MAX_CHIPS}개 더</span>}
                 </button>
