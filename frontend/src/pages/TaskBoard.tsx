@@ -74,7 +74,7 @@ function RunButton({ t, onStarted }: { t: Task; onStarted?: () => void }) {
   );
 }
 
-function Card({ t, onChanged }: { t: Task; onChanged?: () => void }) {
+function Card({ t, onChanged, showProject = true }: { t: Task; onChanged?: () => void; showProject?: boolean }) {
   const accent =
     t.status === "running"
       ? "border-l-blue-500"
@@ -92,11 +92,13 @@ function Card({ t, onChanged }: { t: Task; onChanged?: () => void }) {
     >
       {/* 1줄: 프로젝트 칩 + 제목 */}
       <div className="flex min-w-0 items-center gap-1.5" title={t.title}>
-        <span
-          className={`max-w-[45%] shrink-0 truncate rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${projectTone(t.project_id)}`}
-        >
-          {t.project_name ?? "프로젝트 미연결"}
-        </span>
+        {showProject && (
+          <span
+            className={`max-w-[45%] shrink-0 truncate rounded px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${projectTone(t.project_id)}`}
+          >
+            {t.project_name ?? "프로젝트 미연결"}
+          </span>
+        )}
         <span className="min-w-0 truncate text-sm">{t.title}</span>
       </div>
       {/* 2줄: 상태 · 시간 · 비용 (실패 사유 또는 실행 버튼) */}
@@ -115,23 +117,123 @@ function Card({ t, onChanged }: { t: Task; onChanged?: () => void }) {
   );
 }
 
-/** 작업 칸반 보드: 할 일 → 실행 중 → 리뷰·실패 → 완료 */
+const OPEN_KEY = "tasks.board.open";
+
+function loadOpen(): Set<string> {
+  try {
+    const raw = localStorage.getItem(OPEN_KEY);
+    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+  } catch {
+    return new Set();
+  }
+}
+
+type Group = { key: string; projectId: number | null; name: string; items: Task[] };
+
+/** 칼럼 안의 작업을 프로젝트별로 묶는다. 최근에 갱신된 작업이 있는 프로젝트가 위로 온다. */
+function groupByProject(items: Task[]): Group[] {
+  const map = new Map<string, Group>();
+  for (const t of items) {
+    const key = t.project_id == null ? "none" : String(t.project_id);
+    let g = map.get(key);
+    if (!g) {
+      g = { key, projectId: t.project_id, name: t.project_name ?? "프로젝트 미연결", items: [] };
+      map.set(key, g);
+    }
+    g.items.push(t);
+  }
+  const latest = (g: Group) => Math.max(...g.items.map((t) => new Date(t.updated_at).getTime() || 0));
+  return [...map.values()].sort((a, b) => latest(b) - latest(a));
+}
+
+function ProjectGroup({
+  g,
+  open,
+  onToggle,
+  onChanged,
+}: {
+  g: Group;
+  open: boolean;
+  onToggle: () => void;
+  onChanged?: () => void;
+}) {
+  const failed = g.items.filter((t) => t.status === "failed").length;
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full min-w-0 items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2 py-1.5 text-left hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800/60"
+      >
+        <span className={`shrink-0 text-[10px] text-zinc-400 transition-transform ${open ? "rotate-90" : ""}`}>▶</span>
+        <span
+          className={`min-w-0 truncate rounded px-1.5 py-0.5 text-xs font-medium ring-1 ring-inset ${projectTone(g.projectId)}`}
+          title={g.name}
+        >
+          {g.name}
+        </span>
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-zinc-500">
+          {failed > 0 && <span className="text-red-600 dark:text-red-400">실패 {failed}</span>}
+          <span>{g.items.length}</span>
+        </span>
+      </button>
+      {open && (
+        <div className="mt-1.5 space-y-1.5 border-l-2 border-zinc-200 pl-2 dark:border-zinc-800">
+          {g.items.map((t) => (
+            <Card key={t.id} t={t} onChanged={onChanged} showProject={false} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 작업 칸반 보드: 할 일 → 실행 중 → 리뷰·실패 → 완료. 칼럼 안에서는 프로젝트별로 접어 둔다. */
 export default function TaskBoard({ tasks, onChanged }: { tasks: Task[]; onChanged?: () => void }) {
+  const [open, setOpen] = useState<Set<string>>(loadOpen);
+
+  function toggle(key: string) {
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      try {
+        localStorage.setItem(OPEN_KEY, JSON.stringify([...next]));
+      } catch {
+        /* 저장 못 해도 화면은 바뀐다 */
+      }
+      return next;
+    });
+  }
+
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {COLUMNS.map((col) => {
         const items = tasks.filter((t) => col.statuses.includes(t.status));
+        const groups = groupByProject(items);
         return (
           <section key={col.key} className="rounded-xl bg-zinc-100 p-2 dark:bg-zinc-900/60">
             <div className={`mb-2 flex items-center justify-between px-1 text-sm font-semibold ${col.tone}`}>
               <span>{col.title}</span>
               <span className="text-xs font-normal text-zinc-500">{items.length}</span>
             </div>
-            <div className="space-y-2">
-              {items.length === 0 ? (
+            <div className="space-y-1.5">
+              {groups.length === 0 ? (
                 <p className="px-1 py-4 text-center text-xs text-zinc-400">없음</p>
               ) : (
-                items.map((t) => <Card key={t.id} t={t} onChanged={onChanged} />)
+                groups.map((g) => {
+                  const key = `${col.key}:${g.key}`;
+                  return (
+                    <ProjectGroup
+                      key={g.key}
+                      g={g}
+                      open={open.has(key)}
+                      onToggle={() => toggle(key)}
+                      onChanged={onChanged}
+                    />
+                  );
+                })
               )}
             </div>
           </section>

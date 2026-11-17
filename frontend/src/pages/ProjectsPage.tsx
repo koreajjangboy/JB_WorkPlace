@@ -1,18 +1,53 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { api } from "../api";
-import { Badge, Card, Empty, ErrorBox, Loading, SessionRow } from "../components";
+import { Badge, Button, Card, Empty, ErrorBox, Loading, SessionRow } from "../components";
 import { relativeTime, tokens } from "../format";
 import { useAsync } from "../useAsync";
+import AddProjectDialog from "./AddProjectDialog";
 
 type Sort = "activity" | "name" | "sessions";
 
 export default function ProjectsPage() {
-  const { data, error, loading } = useAsync(() => api.projects(), []);
+  const { data, error, loading, reload } = useAsync(() => api.projects(), []);
   const unmatched = useAsync(() => api.sessions({ unmatched: true, limit: 20 }), []);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>("activity");
   const [onlyWithSessions, setOnlyWithSessions] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const refresh = () => {
+    reload();
+    unmatched.reload();
+  };
+
+  const toggle = (id: number) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const hideSelected = async () => {
+    const names = (data ?? []).filter((p) => selected.has(p.id)).map((p) => p.name);
+    const msg = `${names.length}개 프로젝트를 목록에서 제외할까요?\n\n${names.join("\n")}\n\n폴더와 세션 기록은 지워지지 않으며, 나중에 [프로젝트 추가]에서 다시 추가할 수 있습니다.`;
+    if (!window.confirm(msg)) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      await api.hideProjects([...selected]);
+      setSelected(new Set());
+      refresh();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const rows = useMemo(() => {
     let list = data ?? [];
@@ -51,7 +86,25 @@ export default function ProjectsPage() {
           <input type="checkbox" checked={onlyWithSessions} onChange={(e) => setOnlyWithSessions(e.target.checked)} />
           세션 있는 것만
         </label>
+        <div className="ml-auto flex items-center gap-2">
+          {selected.size > 0 && (
+            <>
+              <Button onClick={() => setSelected(new Set())} disabled={busy}>
+                선택 해제
+              </Button>
+              <Button variant="danger" onClick={hideSelected} disabled={busy}>
+                {busy ? "제외 중…" : `선택한 ${selected.size}개 삭제`}
+              </Button>
+            </>
+          )}
+          <Button variant="primary" onClick={() => setAdding(true)}>
+            + 프로젝트 추가
+          </Button>
+        </div>
       </div>
+
+      {actionError && <ErrorBox message={actionError} />}
+      {adding && <AddProjectDialog onClose={() => setAdding(false)} onAdded={refresh} />}
 
       <Card>
         {rows.length === 0 ? (
@@ -61,6 +114,14 @@ export default function ProjectsPage() {
             <table className="w-full min-w-[640px] text-sm">
               <thead>
                 <tr className="text-left text-xs text-zinc-500">
+                  <th className="w-8 pb-2 font-normal">
+                    <input
+                      type="checkbox"
+                      aria-label="모두 선택"
+                      checked={rows.length > 0 && rows.every((p) => selected.has(p.id))}
+                      onChange={(e) => setSelected(e.target.checked ? new Set(rows.map((p) => p.id)) : new Set())}
+                    />
+                  </th>
                   <th className="pb-2 font-normal">프로젝트</th>
                   <th className="pb-2 font-normal">브랜치</th>
                   <th className="pb-2 text-right font-normal">변경</th>
@@ -71,7 +132,13 @@ export default function ProjectsPage() {
               </thead>
               <tbody>
                 {rows.map((p) => (
-                  <tr key={p.id} className="border-t border-zinc-100 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/50">
+                  <tr
+                    key={p.id}
+                    className={`border-t border-zinc-100 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-800/50 ${selected.has(p.id) ? "bg-blue-50/60 dark:bg-blue-950/30" : ""}`}
+                  >
+                    <td className="py-2">
+                      <input type="checkbox" aria-label={`${p.name} 선택`} checked={selected.has(p.id)} onChange={() => toggle(p.id)} />
+                    </td>
                     <td className="py-2 pr-3">
                       <Link to={`/projects/${p.id}`} className="font-medium hover:underline">
                         {p.name}

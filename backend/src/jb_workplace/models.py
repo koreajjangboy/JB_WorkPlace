@@ -27,6 +27,8 @@ class Project(SQLModel, table=True):
     ahead: int = 0  # push 안 된 커밋 수
     behind: int = 0  # 원격에만 있는 커밋 수 (마지막 fetch 기준)
     has_remote: bool = False
+    hidden: bool = False  # 사용자가 목록에서 제외함. 스캔해도 다시 나타나지 않는다.
+    manual: bool = False  # 사용자가 직접 추가함. 스캔 규칙(스캔 폴더 바로 아래 git 저장소)과 상관없이 유지된다.
     scanned_at: datetime = _ts()
 
 

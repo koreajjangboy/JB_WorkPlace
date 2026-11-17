@@ -39,7 +39,7 @@ def _git(repo: Path, *args: str) -> str | None:
     return result.stdout
 
 
-def _read_repo(repo: Path) -> RepoInfo:
+def read_repo(repo: Path) -> RepoInfo:
     branch = _git(repo, "rev-parse", "--abbrev-ref", "HEAD")
     status = _git(repo, "status", "--porcelain", "--untracked-files=all")
     last = _git(repo, "log", "-1", "--format=%cI")
@@ -82,7 +82,26 @@ def find_repos(roots: list[Path]) -> list[Path]:
     return repos
 
 
-def scan_repos(roots: list[Path]) -> list[RepoInfo]:
-    repos = find_repos(roots)
+def read_repos(repos: list[Path]) -> list[RepoInfo]:
     with ThreadPoolExecutor(max_workers=8) as pool:
-        return list(pool.map(_read_repo, repos))
+        return list(pool.map(read_repo, repos))
+
+
+def scan_repos(roots: list[Path]) -> list[RepoInfo]:
+    return read_repos(find_repos(roots))
+
+
+def list_folders(root: Path) -> list[tuple[Path, bool]]:
+    """폴더 바로 아래의 모든 하위 폴더와 git 저장소 여부. 숨김 폴더(. 이나 $ 로 시작)는 뺀다."""
+    folders: list[tuple[Path, bool]] = []
+    try:
+        children = sorted(root.iterdir(), key=lambda p: p.name.lower())
+    except OSError:
+        return folders
+    for child in children:
+        try:
+            if child.is_dir() and not child.name.startswith((".", "$")):
+                folders.append((child, (child / ".git").exists()))
+        except OSError:
+            continue
+    return folders

@@ -87,7 +87,30 @@ export const api = {
     request<Transcript>(`/api/sessions/${id}/transcript?offset=${offset}&limit=${limit}`),
   scanStatus: () => request<ScanResult | null>("/api/scan"),
   scan: () => request<ScanResult>("/api/scan", { method: "POST" }),
+  addProject: (path: string) =>
+    request<Project>("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    }),
+  hideProjects: (ids: number[]) =>
+    request<{ hidden: number }>("/api/projects/hide", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    }),
+  folders: (path?: string) => request<FolderList>(`/api/folders${path ? `?path=${encodeURIComponent(path)}` : ""}`),
 };
+
+export type FolderEntry = {
+  name: string;
+  path: string;
+  is_git: boolean;
+  /** registered: 이미 목록에 있음, hidden: 목록에서 제외됨 */
+  status: "registered" | "hidden" | null;
+};
+
+export type FolderList = { path: string | null; parent: string | null; folders: FolderEntry[] };
 
 // ---------------------------------------------------------------- M2: 작업 / 실행
 
