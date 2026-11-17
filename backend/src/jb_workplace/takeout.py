@@ -27,7 +27,7 @@ from sqlmodel import Session, select
 
 from .config import BACKEND_DIR, get_settings
 from .db import engine
-from .models import UsageRecord
+from .models import PriceRule, UsageRecord
 from .usage import get_or_create_provider
 
 log = logging.getLogger(__name__)
@@ -36,6 +36,19 @@ PROVIDER = "gemini-app"
 STATE_FILE = BACKEND_DIR / "data" / "takeout_state.json"
 _lock = threading.Lock()
 _TAG = re.compile(r"<[^>]+>")
+
+# 구독이라 실제 청구는 없다. 차트에 보이도록 Claude처럼 API 단가로 환산한다 (기본: Gemini 3.1 Pro 표준 단가, 1M 토큰당
+# 입력 $2 · 출력 $12). 사용량 화면의 단가표에서 바꿀 수 있고, 단가가 이미 있으면 건드리지 않는다.
+DEFAULT_PRICES = {"input_token": 2.0 / 1_000_000, "output_token": 12.0 / 1_000_000}
+
+
+def ensure_default_prices(db: Session, provider_id: int) -> bool:
+    if db.exec(select(PriceRule.id).where(PriceRule.provider_id == provider_id).limit(1)).first():
+        return False
+    for unit, price in DEFAULT_PRICES.items():
+        db.add(PriceRule(provider_id=provider_id, unit=unit, price_per_unit=price, valid_from=datetime(2000, 1, 1).astimezone(),
+                         note="API 환산 기본값 (Gemini 3.1 Pro 표준 단가)"))
+    return True
 
 
 class TakeoutError(ValueError):
@@ -113,6 +126,7 @@ def import_bytes(data: bytes, name: str = "upload") -> dict[str, Any]:
     first, last = min(days), max(days)
     with _lock, Session(engine) as db:
         provider = get_or_create_provider(db, PROVIDER)
+        ensure_default_prices(db, provider.id)
         # 이 파일이 담은 기간은 새 값으로 바꾼다. (같은 날을 다시 가져와도 두 번 세지 않는다)
         db.exec(delete(UsageRecord).where(
             UsageRecord.provider_id == provider.id,
