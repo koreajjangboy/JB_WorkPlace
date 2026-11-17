@@ -37,6 +37,48 @@ export type ProviderInfo = {
   created_at: string;
 };
 
+export type ServiceStatus = ProviderInfo & {
+  collection: "claude_logs" | "app" | "manual";
+  default_unit: string | null;
+  detect: string | null;
+  website: string | null;
+  notes: string | null;
+  helper: string;
+  has_price: boolean;
+  records: number;
+  records_7d: number;
+  last_at: string | null;
+  reporting_projects: string[];
+  used_in: { project: string; files: string[]; instrumented: boolean }[];
+};
+
+export type CatalogItem = {
+  name: string;
+  display_name: string;
+  kind: string;
+  default_unit: string;
+  collection: string;
+  detect: string;
+  helper: string;
+  website: string;
+  registered: boolean;
+};
+
+export const serviceApi = {
+  status: (refresh = false) => request<{ scanned_at: string; services: ServiceStatus[] }>(`/api/usage/services?refresh=${refresh}`),
+  catalog: () => request<CatalogItem[]>("/api/usage/catalog"),
+  create: (data: { name: string; display_name?: string; kind?: string; default_unit?: string; collection?: string; detect?: string; website?: string }) =>
+    request<ProviderInfo>("/api/usage/providers", body("POST", data)),
+  update: (id: number, data: Partial<Pick<ServiceStatus, "display_name" | "kind" | "color" | "collection" | "default_unit" | "detect" | "website" | "notes">>) =>
+    request<ProviderInfo>(`/api/usage/providers/${id}`, body("PATCH", data)),
+  remove: async (id: number) => {
+    const res = await fetch(`/api/usage/providers/${id}`, { method: "DELETE" });
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? res.statusText);
+  },
+  manual: (data: { provider_id: number; date: string; cost_usd?: number | null; quantity?: number; unit?: string; project?: string; note?: string }) =>
+    request<{ id: number }>("/api/usage/manual", body("POST", data)),
+};
+
 export type PriceRule = {
   id: number;
   provider_id: number;

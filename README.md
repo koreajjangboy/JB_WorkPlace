@@ -96,6 +96,13 @@ record_openai(response)                       # OpenAI(또는 provider="upstage"
 record_gemini(response)                       # google-genai 응답의 토큰 수
 ```
 
+**설정 · AI 서비스** (`/settings`)
+- 자주 쓰는 서비스(Claude, Gemini, OpenAI, Upstage, Runway, ElevenLabs, Luma)를 눌러 등록하거나, 목록에 없는 서비스를 직접 추가한다
+- 프로젝트 코드에서 각 서비스의 SDK·API 키 이름을 찾아 "코드에서 쓰는 프로젝트 N곳 · 기록을 보내는 곳 M곳"을 보여준다
+- 서비스마다 연결 방법과 복사할 코드, 아직 연결되지 않은 프로젝트(호출 파일)를 보여준다
+- 연결하기 어려운 서비스는 날짜·비용·사용량을 직접 입력한다 (예: 월 청구서)
+- Gemini 같은 서비스는 각 프로젝트가 `record_gemini(response)`로 보내야 기록된다 (Google 쪽에는 간단한 사용량 API가 없다)
+
 WorkPlace 서버가 꺼져 있어도 앱은 그대로 동작한다 (기록만 빠진다). 주소는 `JB_WORKPLACE_URL`, 프로젝트 이름은 `JB_WORKPLACE_PROJECT`로 바꿀 수 있다.
 
 ## 구성

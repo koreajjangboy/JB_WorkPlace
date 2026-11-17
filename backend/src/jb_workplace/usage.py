@@ -37,13 +37,20 @@ def get_or_create_provider(db: Session, name: str, kind: str = "text", display_n
     provider = db.exec(select(Provider).where(Provider.name == key)).first()
     if provider:
         return provider
+    from .services import CATALOG_BY_NAME
+
     count = db.exec(select(func.count()).select_from(Provider)).one()
+    preset = CATALOG_BY_NAME.get(key, {})
     provider = Provider(
         name=key,
-        display_name=display_name or name.strip(),
-        kind=kind,
+        display_name=display_name or preset.get("display_name") or name.strip(),
+        kind=preset.get("kind", kind),
         color=PALETTE[count % len(PALETTE)],
         created_at=_now(),
+        collection=preset.get("collection", "app"),
+        default_unit=preset.get("default_unit"),
+        detect=preset.get("detect"),
+        website=preset.get("website"),
     )
     db.add(provider)
     db.flush()
@@ -98,6 +105,7 @@ def claude_buckets(main: Path) -> dict[tuple[str, str], dict[str, int]]:
                     continue
                 day = ts.astimezone().date().isoformat()  # 이 PC 시간대 기준 날짜
                 b = buckets[(day, model)]
+                b["last_ts"] = max(b["last_ts"], int(ts.timestamp()))  # 그날 마지막 응답 시각
                 b["input_tokens"] += int(usage.get("input_tokens") or 0)
                 b["output_tokens"] += int(usage.get("output_tokens") or 0)
                 b["cache_write_tokens"] += int(usage.get("cache_creation_input_tokens") or 0)
@@ -111,13 +119,17 @@ def sync_session_usage(db: Session, session: ClaudeSession, provider: Provider) 
     db.exec(delete(UsageRecord).where(UsageRecord.source_ref.like(f"session:{session.id}:%")))
     buckets = claude_buckets(Path(session.file_path))
     for (day, model), t in buckets.items():
-        local_midnight = datetime.combine(datetime.fromisoformat(day).date(), time(12)).astimezone()
+        stamp = (
+            datetime.fromtimestamp(t["last_ts"], tz=UTC)
+            if t.get("last_ts")
+            else datetime.combine(datetime.fromisoformat(day).date(), time(12)).astimezone()
+        )
         total = t["input_tokens"] + t["output_tokens"] + t["cache_write_tokens"] + t["cache_read_tokens"]
         db.add(UsageRecord(
             provider_id=provider.id,
             model=model,
             project_id=session.project_id,
-            ts=local_midnight,
+            ts=stamp,
             kind="text",
             unit="token",
             quantity=total,

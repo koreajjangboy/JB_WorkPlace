@@ -6,11 +6,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from .db import get_session
 from .models import PriceRule, Project, Provider, UsageRecord
-from .usage import PriceBook, UsageIn, record_usage
+from .services import CATALOG, CATALOG_BY_NAME, detect
+from .usage import PriceBook, UsageIn, get_or_create_provider, record_usage
 
 router = APIRouter(prefix="/api/usage")
 
@@ -247,12 +249,146 @@ class ProviderOut(BaseModel):
     kind: str
     color: str | None
     created_at: datetime
+    collection: str
+    default_unit: str | None
+    detect: str | None
+    website: str | None
+    notes: str | None
+
+
+KIND_PATTERN = "^(text|image|video|audio|embedding|mixed)$"
+COLLECTION_PATTERN = "^(claude_logs|app|manual)$"
 
 
 class ProviderPatch(BaseModel):
     display_name: str | None = Field(default=None, max_length=60)
-    kind: str | None = Field(default=None, pattern="^(text|image|video|audio|embedding|mixed)$")
+    kind: str | None = Field(default=None, pattern=KIND_PATTERN)
     color: str | None = Field(default=None, pattern="^#[0-9A-Fa-f]{6}$")
+    collection: str | None = Field(default=None, pattern=COLLECTION_PATTERN)
+    default_unit: str | None = Field(default=None, max_length=40)
+    detect: str | None = Field(default=None, max_length=500)
+    website: str | None = Field(default=None, max_length=300)
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+class ProviderCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=40, pattern="^[A-Za-z0-9_.-]+$")
+    display_name: str | None = Field(default=None, max_length=60)
+    kind: str | None = Field(default=None, pattern=KIND_PATTERN)
+    collection: str | None = Field(default=None, pattern=COLLECTION_PATTERN)
+    default_unit: str | None = Field(default=None, max_length=40)
+    detect: str | None = Field(default=None, max_length=500)
+    website: str | None = Field(default=None, max_length=300)
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+@router.get("/catalog")
+def catalog(db: Session = Depends(get_session)) -> list[dict]:
+    """등록할 때 고를 수 있는 자주 쓰는 서비스 목록."""
+    registered = {p.name for p in db.exec(select(Provider)).all()}
+    return [{**c, "registered": c["name"] in registered} for c in CATALOG]
+
+
+@router.post("/providers", response_model=ProviderOut, status_code=201)
+def create_provider(body: ProviderCreate, db: Session = Depends(get_session)) -> ProviderOut:
+    key = body.name.strip().lower()
+    if db.exec(select(Provider).where(Provider.name == key)).first():
+        raise HTTPException(409, "이미 등록된 서비스입니다")
+    provider = get_or_create_provider(db, key, body.kind or "text", body.display_name)
+    for field, value in body.model_dump(exclude={"name"}, exclude_none=True).items():
+        setattr(provider, field, value)
+    db.add(provider)
+    db.commit()
+    db.refresh(provider)
+    return ProviderOut(**provider.model_dump())
+
+
+@router.delete("/providers/{provider_id}", status_code=204)
+def delete_provider(provider_id: int, db: Session = Depends(get_session)) -> None:
+    provider = db.get(Provider, provider_id)
+    if provider is None:
+        raise HTTPException(404, "서비스를 찾을 수 없습니다")
+    used = db.exec(select(func.count()).select_from(UsageRecord).where(UsageRecord.provider_id == provider_id)).one()
+    if used:
+        raise HTTPException(409, f"사용량 기록이 {used}건 있어 지울 수 없습니다. 기록을 남겨 두려면 메모만 바꾸세요.")
+    for rule in db.exec(select(PriceRule).where(PriceRule.provider_id == provider_id)).all():
+        db.delete(rule)
+    db.delete(provider)
+    db.commit()
+
+
+@router.get("/services")
+def services_status(refresh: bool = False, db: Session = Depends(get_session)) -> dict:
+    """설정 화면: 서비스별 연결 상태 (기록, 마지막 수신, 코드에서 쓰는 프로젝트와 연결된 프로젝트)."""
+    providers = db.exec(select(Provider).order_by(Provider.name)).all()
+    projects = db.exec(select(Project).where(Project.exists == True)).all()  # noqa: E712
+    names = {p.id: p.name for p in projects}
+    week_ago = datetime.now(UTC) - timedelta(days=7)
+
+    stats: dict[int, dict[str, Any]] = {}
+    for pid, total, last, recent in db.exec(
+        select(
+            UsageRecord.provider_id,
+            func.count(),
+            func.max(UsageRecord.ts),
+            func.count().filter(UsageRecord.ts >= week_ago),
+        ).group_by(UsageRecord.provider_id)
+    ).all():
+        stats[pid] = {"records": total, "last_at": last, "records_7d": recent}
+    reporting: dict[int, set[str]] = defaultdict(set)
+    for pid, proj_id in db.exec(
+        select(UsageRecord.provider_id, UsageRecord.project_id).where(UsageRecord.project_id != None).distinct()  # noqa: E711
+    ).all():
+        if proj_id in names:
+            reporting[pid].add(names[proj_id])
+
+    scan = detect(
+        [(p.id, p.name, p.path) for p in projects],
+        [(p.name, p.detect) for p in providers if p.detect],
+        refresh=refresh,
+    )
+    out = []
+    for p in providers:
+        used_in = [
+            {"project": info["name"], "files": info["uses"][p.name], "instrumented": info["instrumented"]}
+            for info in scan["projects"].values()
+            if p.name in info["uses"]
+        ]
+        out.append({
+            **ProviderOut(**p.model_dump()).model_dump(mode="json"),
+            "helper": CATALOG_BY_NAME.get(p.name, {}).get("helper", "record_usage"),
+            "has_price": bool(db.exec(select(PriceRule.id).where(PriceRule.provider_id == p.id).limit(1)).first()),
+            **{k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in stats.get(p.id, {"records": 0, "last_at": None, "records_7d": 0}).items()},
+            "reporting_projects": sorted(reporting.get(p.id, set())),
+            "used_in": sorted(used_in, key=lambda x: x["project"].lower()),
+        })
+    return {"scanned_at": scan["scanned_at"], "services": out}
+
+
+class ManualIn(BaseModel):
+    provider_id: int
+    date: datetime
+    cost_usd: float | None = Field(default=None, ge=0)
+    quantity: float = Field(default=0, ge=0)
+    unit: str | None = Field(default=None, max_length=40)
+    project: str | None = Field(default=None, max_length=200)
+    note: str | None = Field(default=None, max_length=300)
+
+
+@router.post("/manual", status_code=201)
+def add_manual(body: ManualIn, db: Session = Depends(get_session)) -> dict:
+    """연결하기 어려운 서비스의 사용량·비용을 직접 입력한다 (예: 이번 달 청구서 금액)."""
+    provider = db.get(Provider, body.provider_id)
+    if provider is None:
+        raise HTTPException(404, "서비스를 찾을 수 없습니다")
+    if body.cost_usd is None and not body.quantity:
+        raise HTTPException(400, "비용이나 사용량 중 하나는 입력하세요")
+    record = record_usage(db, UsageIn(
+        provider=provider.name, unit=body.unit or provider.default_unit or "request", quantity=body.quantity,
+        kind=provider.kind, project=body.project, cost_usd=body.cost_usd, ts=body.date, source="manual",
+        meta={"note": body.note} if body.note else None,
+    ))
+    return {"id": record.id}
 
 
 @router.get("/providers", response_model=list[ProviderOut])

@@ -51,6 +51,9 @@ export default function App() {
             <NavLink to="/usage" className={navClass}>
               사용량
             </NavLink>
+            <NavLink to="/settings" className={navClass}>
+              설정
+            </NavLink>
           </nav>
           <div className="ml-auto flex items-center gap-3 text-xs text-zinc-500">
             {scanError ? (

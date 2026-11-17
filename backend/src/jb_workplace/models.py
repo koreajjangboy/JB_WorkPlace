@@ -140,6 +140,11 @@ class Provider(SQLModel, table=True):
     kind: str = "text"  # text | image | video | audio | embedding | mixed
     color: str | None = None
     created_at: datetime = _ts()
+    collection: str = "app"  # claude_logs(자동) | app(jb_usage로 기록) | manual(직접 입력)
+    default_unit: str | None = None
+    detect: str | None = None  # 프로젝트 코드에서 이 서비스를 찾는 정규식 (SDK·API 키 이름)
+    website: str | None = None
+    notes: str | None = None
 
 
 class UsageRecord(SQLModel, table=True):

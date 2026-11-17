@@ -10,6 +10,7 @@ import ProjectsPage from "./pages/ProjectsPage";
 import NewTaskPage from "./pages/NewTaskPage";
 import SessionPage from "./pages/SessionPage";
 import TaskDetailPage from "./pages/TaskDetailPage";
+import SettingsPage from "./pages/SettingsPage";
 import TasksPage from "./pages/TasksPage";
 import UsagePage from "./pages/UsagePage";
 
@@ -27,6 +28,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="tasks/new" element={<NewTaskPage />} />
           <Route path="tasks/:taskId" element={<TaskDetailPage />} />
           <Route path="usage" element={<UsagePage />} />
+          <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Routes>
     </BrowserRouter>
