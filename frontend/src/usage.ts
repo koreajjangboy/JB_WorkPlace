@@ -163,3 +163,13 @@ export const takeoutApi = {
       body: file,
     }),
 };
+
+export type BillingTableResult = { table: string; rows: number; saved: number; skipped_csv_days: number; cost_usd: number; first: string | null; last: string | null };
+export type BillingSync = { at: string; tables: BillingTableResult[]; error: string | null };
+export type BillingStatus = { tables: string[]; services: Record<string, string>; sync_hours: number; last_sync: BillingSync | null };
+
+/** Google Cloud 결제 내보내기(BigQuery) */
+export const billingApi = {
+  status: () => request<BillingStatus>("/api/usage/billing"),
+  sync: (full = false) => request<BillingStatus & { result: BillingSync }>(`/api/usage/billing/sync?full=${full}`, { method: "POST" }),
+};

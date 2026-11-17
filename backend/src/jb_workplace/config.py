@@ -77,6 +77,24 @@ class Settings(BaseSettings):
     # Takeout을 Google Drive로 받고 Drive 데스크톱 앱으로 동기화하면 'G:\내 드라이브\Takeout' 에 생긴다.
     takeout_dirs: str = str(Path.home() / "Downloads") + r",G:\내 드라이브\Takeout,G:\My Drive\Takeout"
 
+    # ---- Google Cloud 결제 내보내기 (BigQuery) ----
+    # 결제 내보내기 테이블 전체 이름 (프로젝트.데이터세트.gcp_billing_export_v1_…). 쉼표로 여러 개 지정.
+    # 인증은 `gcloud auth application-default login` 으로 만든 ADC (또는 GOOGLE_APPLICATION_CREDENTIALS 키 파일).
+    gcp_billing_tables: str = ""
+    # 가져올 서비스: "결제 서비스 이름=WorkPlace 서비스 이름". 쉼표로 여러 개 지정.
+    gcp_billing_services: str = "Gemini API=gemini"
+    # 몇 시간마다 가져올지
+    gcp_billing_sync_hours: int = 6
+
+    @property
+    def billing_tables(self) -> list[str]:
+        return [t.strip().strip("`") for t in self.gcp_billing_tables.split(",") if t.strip()]
+
+    @property
+    def billing_services(self) -> dict[str, str]:
+        pairs = (p.split("=", 1) for p in self.gcp_billing_services.split(",") if "=" in p)
+        return {k.strip(): v.strip().lower() for k, v in pairs if k.strip() and v.strip()}
+
     @property
     def takeout_dir_paths(self) -> list[Path]:
         return [Path(p.strip()) for p in self.takeout_dirs.split(",") if p.strip()]

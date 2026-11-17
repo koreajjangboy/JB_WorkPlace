@@ -35,6 +35,9 @@ async def lifespan(app: FastAPI):
     from .takeout import watch_forever
 
     threading.Thread(target=watch_forever, daemon=True).start()  # Gemini 앱 Takeout 폴더 확인
+    from .billing import watch_forever as watch_billing
+
+    threading.Thread(target=watch_billing, daemon=True).start()  # Google Cloud 결제 내보내기
     yield
 
 

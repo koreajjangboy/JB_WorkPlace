@@ -497,3 +497,21 @@ def takeout_scan() -> dict:
     from . import takeout
 
     return {"imported": takeout.scan_dirs(), **takeout.status()}
+
+
+# ---------------------------------------------------------------- Google Cloud 결제 내보내기 (BigQuery)
+
+
+@router.get("/billing")
+def billing_status() -> dict:
+    from . import billing
+
+    return billing.status()
+
+
+@router.post("/billing/sync")
+def billing_sync(full: bool = False) -> dict:
+    """결제 내보내기 테이블에서 지금 가져온다. full=true면 처음부터."""
+    from . import billing
+
+    return {**billing.status(), "result": billing.sync_safely(full)}

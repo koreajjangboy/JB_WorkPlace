@@ -3,7 +3,7 @@ import { Link } from "react-router";
 import { Badge, Button, Card, Empty, ErrorBox, Loading } from "../components";
 import { relativeTime } from "../format";
 import { useAsync } from "../useAsync";
-import { UNIT_LABEL, serviceApi, takeoutApi, type CatalogItem, type ServiceStatus, type TakeoutImport } from "../usage";
+import { UNIT_LABEL, billingApi, serviceApi, takeoutApi, type BillingStatus, type CatalogItem, type ServiceStatus, type TakeoutImport } from "../usage";
 
 const KINDS: [string, string][] = [
   ["text", "텍스트"],
@@ -191,7 +191,52 @@ function TakeoutPanel({ onDone }: { onDone: () => void }) {
   );
 }
 
-function ServiceCard({ s, onChanged }: { s: ServiceStatus; onChanged: () => void }) {
+/** Google Cloud 결제 내보내기(BigQuery)에서 실제 비용을 가져오는 서비스 (예: Gemini API) */
+function BillingPanel({ billing, onDone }: { billing: BillingStatus; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const last = billing.last_sync;
+
+  async function sync() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await billingApi.sync(!last?.tables.some((t) => t.rows > 0));
+      if (r.result.error) setError(r.result.error);
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const rows = last?.tables.reduce((n, t) => n + t.rows, 0) ?? 0;
+  return (
+    <div className="mt-2 space-y-1 rounded-md bg-zinc-50 p-2 text-xs dark:bg-zinc-950">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">Google Cloud 결제 내보내기</span>
+        {last?.error ? <Badge tone="red">오류</Badge> : rows > 0 ? <Badge tone="green">연결됨</Badge> : <Badge tone="amber">데이터 기다리는 중</Badge>}
+        <button onClick={sync} disabled={busy} className="ml-auto text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400">
+          {busy ? "가져오는 중…" : "지금 가져오기"}
+        </button>
+      </div>
+      <p className="text-zinc-600 dark:text-zinc-400">
+        크레딧을 뺀 실제 청구 금액을 {billing.sync_hours}시간마다 날짜·프로젝트·모델별로 가져옵니다.
+        {last && <> 마지막 확인 {relativeTime(last.at)}.</>}
+      </p>
+      {last?.tables.map((t) => (
+        <p key={t.table} className="font-mono text-[11px] text-zinc-500" title={t.table}>
+          {t.table.split(".").slice(0, 2).join(".")} ·{" "}
+          {t.rows > 0 ? `${t.first} ~ ${t.last}, ${t.saved}건 ${t.cost_usd.toFixed(2)}${t.skipped_csv_days ? ` (CSV로 넣은 기간 ${t.skipped_csv_days}건 제외)` : ""}` : "아직 비어 있음 — 내보내기를 켠 뒤 몇 시간~하루 걸립니다"}
+        </p>
+      ))}
+      {(error || last?.error) && <p className="text-red-600 dark:text-red-400">{error || last?.error}</p>}
+    </div>
+  );
+}
+
+function ServiceCard({ s, onChanged, billing }: { s: ServiceStatus; onChanged: () => void; billing?: BillingStatus }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -258,6 +303,7 @@ function ServiceCard({ s, onChanged }: { s: ServiceStatus; onChanged: () => void
       </div>
 
       {s.collection === "takeout" && <TakeoutPanel onDone={onChanged} />}
+      {billing && <BillingPanel billing={billing} onDone={onChanged} />}
 
       {s.collection !== "claude_logs" && s.collection !== "takeout" && (
         <div className="mt-2 text-xs">
@@ -443,6 +489,7 @@ function AddService({ catalog, onAdded }: { catalog: CatalogItem[]; onAdded: () 
 
 export default function SettingsPage() {
   const status = useAsync(() => serviceApi.status(false), []);
+  const billing = useAsync(() => billingApi.status(), []);
   const catalog = useAsync(() => serviceApi.catalog(), []);
   const [scanning, setScanning] = useState(false);
 
@@ -458,6 +505,7 @@ export default function SettingsPage() {
 
   function reloadAll() {
     status.reload();
+    billing.reload();
     catalog.reload();
   }
 
@@ -488,7 +536,12 @@ export default function SettingsPage() {
       ) : (
         <div className="grid grid-cols-[minmax(0,1fr)] gap-3 lg:grid-cols-2">
           {services.map((s) => (
-            <ServiceCard key={s.id} s={s} onChanged={reloadAll} />
+            <ServiceCard
+              key={s.id}
+              s={s}
+              onChanged={reloadAll}
+              billing={billing.data && billing.data.tables.length > 0 && Object.values(billing.data.services).includes(s.name) ? billing.data : undefined}
+            />
           ))}
         </div>
       )}
