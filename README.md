@@ -107,6 +107,8 @@ record_gemini(response)                       # google-genai 응답의 토큰 �
   - Billing 보고서 CSV로 넣어 둔 기간(`covered_until`)은 두 번 세지 않도록 건너뛴다
 - **OpenAI API (조직 Usage·Costs API)**: `OPENAI_ADMIN_KEY`(platform.openai.com 조직 설정 → Admin keys, Read only)를 넣으면 6시간마다 실제 비용(프로젝트·항목별)과 모델별 토큰을 가져온다
   - 처음에는 180일, 이후에는 최근 40일을 다시 읽는다. 토큰 기록은 비용 0으로 두어 금액은 비용 기록에서만 센다
+- **Runway API (개발자 API 조직 사용량)**: `RUNWAY_API_KEY`(dev.runwayml.com)를 넣으면 6시간마다 API 크레딧 사용량을 날짜·모델별로 가져온다 (1크레딧 $0.01, 처음 90일 이후 최근 40일)
+  - 웹 앱(구독) 크레딧은 별도 풀이고 조회 API가 Enterprise 전용이라 가져오지 않는다
 - **Gemini 앱(웹·모바일)**: Google Takeout의 '내 활동 → Gemini 앱'(형식 JSON) 내보내기에서 질문·답의 글자 수로 토큰을 **추정**한다
   - 설정 화면에서 zip을 올리거나, `TAKEOUT_DIRS` 폴더(기본: 다운로드, `G:\내 드라이브\Takeout`)에 생긴 `takeout-*.zip`을 10분마다 자동으로 가져온다
   - 자동화: Takeout 예약 내보내기(2개월마다, Drive로 전송) + Google Drive 데스크톱 동기화

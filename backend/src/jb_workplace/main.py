@@ -41,6 +41,9 @@ async def lifespan(app: FastAPI):
     from .openai_usage import watch_forever as watch_openai
 
     threading.Thread(target=watch_openai, daemon=True).start()  # OpenAI 조직 사용량
+    from .runway_usage import watch_forever as watch_runway
+
+    threading.Thread(target=watch_runway, daemon=True).start()  # Runway API 사용량
     yield
 
 

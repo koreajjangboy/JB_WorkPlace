@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { Badge, Button, Card, Empty, ErrorBox, Loading } from "../components";
 import { relativeTime } from "../format";
 import { useAsync } from "../useAsync";
-import { UNIT_LABEL, billingApi, openaiApi, serviceApi, takeoutApi, type BillingStatus, type CatalogItem, type OpenAIStatus, type ServiceStatus, type TakeoutImport } from "../usage";
+import { UNIT_LABEL, billingApi, openaiApi, runwayApi, serviceApi, takeoutApi, type BillingStatus, type CatalogItem, type OpenAIStatus, type RunwayStatus, type ServiceStatus, type TakeoutImport } from "../usage";
 
 const KINDS: [string, string][] = [
   ["text", "텍스트"],
@@ -236,18 +236,34 @@ function BillingPanel({ billing, onDone }: { billing: BillingStatus; onDone: () 
   );
 }
 
-/** OpenAI: 조직 Usage·Costs API (Admin 키)에서 실제 비용과 토큰을 가져온다. */
-function OpenAIPanel({ st, onDone }: { st: OpenAIStatus; onDone: () => void }) {
+type ApiSyncStatus = { configured: boolean; sync_hours: number; last_sync: { at: string; error: string | null; first?: string | null; last?: string | null } | null };
+
+/** 서비스의 사용량 API(키 필요)에서 주기적으로 가져오는 연결 상태 (OpenAI, Runway 등) */
+function ApiUsagePanel({
+  title,
+  st,
+  summary,
+  sync,
+  guide,
+  onDone,
+}: {
+  title: string;
+  st: ApiSyncStatus;
+  summary: () => string;
+  sync: () => Promise<{ result: { error: string | null } }>;
+  guide: ReactNode;
+  onDone: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [guide, setGuide] = useState(!st.configured);
+  const [showGuide, setShowGuide] = useState(!st.configured);
   const last = st.last_sync;
 
-  async function sync() {
+  async function run() {
     setBusy(true);
     setError(null);
     try {
-      const r = await openaiApi.sync();
+      const r = await sync();
       if (r.result.error) setError(r.result.error);
       onDone();
     } catch (e) {
@@ -260,7 +276,7 @@ function OpenAIPanel({ st, onDone }: { st: OpenAIStatus; onDone: () => void }) {
   return (
     <div className="mt-2 space-y-1 rounded-md bg-zinc-50 p-2 text-xs dark:bg-zinc-950">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-medium">OpenAI 조직 사용량 API</span>
+        <span className="font-medium">{title}</span>
         {!st.configured ? (
           <Badge tone="amber">키 없음</Badge>
         ) : last?.error ? (
@@ -271,50 +287,97 @@ function OpenAIPanel({ st, onDone }: { st: OpenAIStatus; onDone: () => void }) {
           <Badge>확인 전</Badge>
         )}
         {st.configured && (
-          <button onClick={sync} disabled={busy} className="ml-auto text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400">
+          <button onClick={run} disabled={busy} className="ml-auto text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400">
             {busy ? "가져오는 중…" : "지금 가져오기"}
           </button>
         )}
       </div>
       <p className="text-zinc-600 dark:text-zinc-400">
-        실제 청구 금액과 모델별 토큰을 {st.sync_hours}시간마다 날짜·프로젝트별로 가져옵니다. 코드는 고치지 않아도 됩니다.
+        {st.sync_hours}시간마다 자동으로 가져옵니다. 코드는 고치지 않아도 됩니다.
         {last && !last.error && (
           <>
             {" "}
-            마지막 확인 {relativeTime(last.at)}
-            {last.first ? ` · ${last.first} ~ ${last.last}, ${(last.cost_usd ?? 0).toFixed(2)}, ${(last.tokens ?? 0).toLocaleString()} 토큰` : " · 최근 사용 내역 없음"}.
+            마지막 확인 {relativeTime(last.at)} · {last.first ? summary() : "최근 사용 내역 없음"}.
           </>
         )}
       </p>
       {(error || last?.error) && <p className="text-red-600 dark:text-red-400">{error || last?.error}</p>}
-      <button onClick={() => setGuide(!guide)} className="text-blue-600 hover:underline dark:text-blue-400">
-        {guide ? "안내 닫기" : "연결 방법"}
+      <button onClick={() => setShowGuide(!showGuide)} className="text-blue-600 hover:underline dark:text-blue-400">
+        {showGuide ? "안내 닫기" : "연결 방법"}
       </button>
-      {guide && (
-        <ol className="list-decimal space-y-0.5 pl-5 text-zinc-600 dark:text-zinc-400">
-          <li>
-            <a href="https://platform.openai.com/settings/organization/admin-keys" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline dark:text-blue-400">
-              platform.openai.com → 조직 설정 → Admin keys
-            </a>
-            에서 <b>Create new admin key</b> (조직 Owner만 가능), 권한은 <b>Read only</b>
-          </li>
-          <li>
-            <code className="font-mono">backend\.env</code>에 <code className="font-mono">OPENAI_ADMIN_KEY=sk-admin-…</code> 한 줄 추가
-          </li>
-          <li>백엔드를 다시 시작하면 처음 180일을 가져오고, 이후 {st.sync_hours}시간마다 최근 40일을 다시 읽습니다</li>
-        </ol>
-      )}
+      {showGuide && <ol className="list-decimal space-y-0.5 pl-5 text-zinc-600 dark:text-zinc-400">{guide}</ol>}
     </div>
   );
 }
 
-function ServiceCard({ s, onChanged, billing, openai }: { s: ServiceStatus; onChanged: () => void; billing?: BillingStatus; openai?: OpenAIStatus }) {
+const linkCls = "text-blue-600 hover:underline dark:text-blue-400";
+
+function OpenAIPanel({ st, onDone }: { st: OpenAIStatus; onDone: () => void }) {
+  const l = st.last_sync;
+  return (
+    <ApiUsagePanel
+      title="OpenAI 조직 사용량 API"
+      st={st}
+      onDone={onDone}
+      sync={() => openaiApi.sync()}
+      summary={() => `${l?.first} ~ ${l?.last}, $${(l?.cost_usd ?? 0).toFixed(2)}, ${(l?.tokens ?? 0).toLocaleString()} 토큰`}
+      guide={
+        <>
+          <li>
+            <a href="https://platform.openai.com/settings/organization/admin-keys" target="_blank" rel="noreferrer" className={linkCls}>
+              platform.openai.com → 조직 설정 → Admin keys
+            </a>
+            에서 <b>Create new admin key</b> (조직 Owner만 가능, 개인 계정은 Personal 조직), 권한은 <b>Read only</b>
+          </li>
+          <li>
+            <code className="font-mono">backend\.env</code>에 <code className="font-mono">OPENAI_ADMIN_KEY=sk-admin-…</code> 추가 후 백엔드 다시 시작
+          </li>
+          <li>처음 180일을 가져오고, 이후 최근 40일을 다시 읽어 실제 비용과 모델별 토큰을 반영합니다</li>
+        </>
+      }
+    />
+  );
+}
+
+function RunwayPanel({ st, onDone }: { st: RunwayStatus; onDone: () => void }) {
+  const l = st.last_sync;
+  return (
+    <ApiUsagePanel
+      title="Runway 개발자 API 사용량"
+      st={st}
+      onDone={onDone}
+      sync={() => runwayApi.sync()}
+      summary={() =>
+        `${l?.first} ~ ${l?.last}, ${(l?.credits ?? 0).toLocaleString()} 크레딧 ($${(l?.cost_usd ?? 0).toFixed(2)})` +
+        (l?.credit_balance != null ? ` · 남은 크레딧 ${l.credit_balance.toLocaleString()}` : "")
+      }
+      guide={
+        <>
+          <li>
+            <a href="https://dev.runwayml.com" target="_blank" rel="noreferrer" className={linkCls}>
+              dev.runwayml.com
+            </a>{" "}
+            개발자 포털 → <b>API Keys</b>에서 키 만들기 (만든 직후에만 보이므로 바로 복사)
+          </li>
+          <li>
+            <code className="font-mono">backend\.env</code>에 <code className="font-mono">RUNWAY_API_KEY=key_…</code> 추가 후 백엔드 다시 시작
+          </li>
+          <li>API로 쓴 크레딧을 날짜·모델별로 가져옵니다 (1크레딧 ${st.usd_per_credit}). 처음 90일, 이후 최근 40일</li>
+          <li>웹 앱(구독)에서 쓴 크레딧은 별도이며, 조회 API가 Enterprise 플랜에서만 열려 있어 가져올 수 없습니다</li>
+        </>
+      }
+    />
+  );
+}
+
+
+function ServiceCard({ s, onChanged, billing, openai, runway }: { s: ServiceStatus; onChanged: () => void; billing?: BillingStatus; openai?: OpenAIStatus; runway?: RunwayStatus }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const missing = s.used_in.filter((u) => !s.reporting_projects.includes(u.project));
   // 서비스 API(결제 내보내기·OpenAI 조직 사용량)로 가져오면 코드에 jb_usage를 붙일 필요가 없다.
-  const viaApi = !!billing || !!openai?.configured;
+  const viaApi = !!billing || !!openai?.configured || !!runway?.configured;
 
   async function patch(change: Parameters<typeof serviceApi.update>[1]) {
     setError(null);
@@ -352,7 +415,7 @@ function ServiceCard({ s, onChanged, billing, openai }: { s: ServiceStatus; onCh
         <span className="font-semibold">{s.display_name ?? s.name}</span>
         <Status s={s} />
         <Badge>{KINDS.find(([k]) => k === s.kind)?.[1] ?? s.kind}</Badge>
-        {!s.has_price && s.collection !== "claude_logs" && (
+        {!s.has_price && s.collection !== "claude_logs" && !viaApi && (
           <Link to="/usage">
             <Badge tone="amber">단가 없음</Badge>
           </Link>
@@ -379,6 +442,7 @@ function ServiceCard({ s, onChanged, billing, openai }: { s: ServiceStatus; onCh
       {s.collection === "takeout" && <TakeoutPanel onDone={onChanged} />}
       {billing && <BillingPanel billing={billing} onDone={onChanged} />}
       {openai && <OpenAIPanel st={openai} onDone={onChanged} />}
+      {runway && <RunwayPanel st={runway} onDone={onChanged} />}
 
       {s.collection !== "claude_logs" && s.collection !== "takeout" && !viaApi && (
         <div className="mt-2 text-xs">
@@ -566,6 +630,7 @@ export default function SettingsPage() {
   const status = useAsync(() => serviceApi.status(false), []);
   const billing = useAsync(() => billingApi.status(), []);
   const openai = useAsync(() => openaiApi.status(), []);
+  const runway = useAsync(() => runwayApi.status(), []);
   const catalog = useAsync(() => serviceApi.catalog(), []);
   const [scanning, setScanning] = useState(false);
 
@@ -583,6 +648,7 @@ export default function SettingsPage() {
     status.reload();
     billing.reload();
     openai.reload();
+    runway.reload();
     catalog.reload();
   }
 
@@ -618,6 +684,7 @@ export default function SettingsPage() {
               s={s}
               onChanged={reloadAll}
               openai={s.name === "openai" ? openai.data ?? undefined : undefined}
+              runway={s.name === "runway" ? runway.data ?? undefined : undefined}
               billing={billing.data && billing.data.tables.length > 0 && Object.values(billing.data.services).includes(s.name) ? billing.data : undefined}
             />
           ))}

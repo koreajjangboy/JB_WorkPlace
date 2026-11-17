@@ -91,6 +91,12 @@ class Settings(BaseSettings):
     openai_admin_key: str = ""
     openai_sync_hours: int = 6
 
+    # ---- Runway (개발자 API 조직 사용량) ----
+    # dev.runwayml.com 개발자 포털에서 만든 API 키
+    runway_api_key: str = ""
+    runway_usd_per_credit: float = 0.01  # API 크레딧 1개 가격
+    runway_sync_hours: int = 6
+
     @property
     def billing_tables(self) -> list[str]:
         return [t.strip().strip("`") for t in self.gcp_billing_tables.split(",") if t.strip()]

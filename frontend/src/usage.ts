@@ -182,3 +182,12 @@ export const openaiApi = {
   status: () => request<OpenAIStatus>("/api/usage/openai"),
   sync: (full?: boolean) => request<OpenAIStatus & { result: OpenAISync }>(`/api/usage/openai/sync${full == null ? "" : `?full=${full}`}`, { method: "POST" }),
 };
+
+export type RunwaySync = { at: string; error: string | null; records?: number; credits?: number; cost_usd?: number; credit_balance?: number | null; first?: string | null; last?: string | null };
+export type RunwayStatus = { configured: boolean; sync_hours: number; usd_per_credit: number; last_sync: RunwaySync | null };
+
+/** Runway 개발자 API 사용량 */
+export const runwayApi = {
+  status: () => request<RunwayStatus>("/api/usage/runway"),
+  sync: (full?: boolean) => request<RunwayStatus & { result: RunwaySync }>(`/api/usage/runway/sync${full == null ? "" : `?full=${full}`}`, { method: "POST" }),
+};

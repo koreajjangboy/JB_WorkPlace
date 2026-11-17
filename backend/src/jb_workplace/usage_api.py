@@ -533,3 +533,21 @@ def openai_sync(full: bool | None = None) -> dict:
     from . import openai_usage
 
     return {**openai_usage.status(), "result": openai_usage.sync_safely(full)}
+
+
+# ---------------------------------------------------------------- Runway (개발자 API 조직 사용량)
+
+
+@router.get("/runway")
+def runway_status() -> dict:
+    from . import runway_usage
+
+    return runway_usage.status()
+
+
+@router.post("/runway/sync")
+def runway_sync(full: bool | None = None) -> dict:
+    """Runway API 크레딧 사용량을 지금 가져온다. full=true면 90일."""
+    from . import runway_usage
+
+    return {**runway_usage.status(), "result": runway_usage.sync_safely(full)}
