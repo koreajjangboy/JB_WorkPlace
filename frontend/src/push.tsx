@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { projectChangesApi, type Project, type PushResult } from "./api";
+import { useEffect, useState } from "react";
+import { projectChangesApi, request, type Project, type PushResult } from "./api";
 import { Badge, Button } from "./components";
 
 /** push 결과 한 줄: 성공이면 초록, 실패면 이유와 함께 빨강. */
@@ -24,6 +24,35 @@ export function PushOutcome({ result, sha }: { result: PushResult | null; sha?: 
       {!sha && ok && "push 완료"}
       {failed && <span>{result!.push_error}</span>}
     </div>
+  );
+}
+
+type RemoteInfo = { remote: string | null; web_url: string | null; branch_url: string | null; host: string | null };
+
+/** 원격 저장소(GitHub 등)를 새 탭에서 여는 링크. 웹 주소로 바꿀 수 없는 원격이면 아무것도 안 보인다. */
+export function RemoteLink({ projectId }: { projectId: number }) {
+  const [info, setInfo] = useState<RemoteInfo | null>(null);
+  useEffect(() => {
+    let alive = true;
+    request<RemoteInfo>(`/api/projects/${projectId}/remote`)
+      .then((r) => alive && setInfo(r))
+      .catch(() => alive && setInfo(null));
+    return () => {
+      alive = false;
+    };
+  }, [projectId]);
+  if (!info?.web_url) return null;
+  const label = info.host === "github.com" ? "GitHub" : info.host === "gitlab.com" ? "GitLab" : info.host;
+  return (
+    <a
+      href={info.web_url}
+      target="_blank"
+      rel="noreferrer"
+      title={info.web_url}
+      className="inline-flex items-center gap-1 rounded-md border border-zinc-300 px-2 py-0.5 text-blue-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-blue-400 dark:hover:bg-zinc-800"
+    >
+      {label}에서 보기 ↗
+    </a>
   );
 }
 
@@ -68,6 +97,7 @@ export function PushBar({ project, onPushed }: { project: Project; onPushed: () 
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+        <RemoteLink projectId={project.id} />
         <span>{project.upstream ? `원격: ${project.upstream}` : "원격 브랜치에 아직 연결되지 않음"}</span>
         {project.ahead > 0 && <Badge tone="blue">push 안 된 커밋 {project.ahead}</Badge>}
         {project.behind > 0 && <Badge tone="amber">원격에 새 커밋 {project.behind} (pull 필요)</Badge>}

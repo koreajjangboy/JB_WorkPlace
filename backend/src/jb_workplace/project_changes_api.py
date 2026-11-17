@@ -129,3 +129,48 @@ def project_fetch(project_id: int, db: Session = Depends(get_session)) -> dict:
     project = db.get(Project, project_id)
     db.refresh(project)
     return {"output": output, "ahead": project.ahead, "behind": project.behind, "upstream": project.upstream}
+
+
+def web_url(remote: str) -> str | None:
+    """git 원격 주소를 브라우저 주소로 바꾼다. (git@github.com:a/b.git, https://user:token@github.com/a/b.git → https://github.com/a/b)"""
+    import re
+
+    remote = remote.strip()
+    m = re.match(r"^(?:ssh://)?[\w.\-]+@([\w.\-]+)(?::\d+)?[:/](.+?)(?:\.git)?/?$", remote)
+    if m and not remote.startswith(("http://", "https://")):
+        return f"https://{m.group(1)}/{m.group(2)}"
+    m = re.match(r"^https?://(?:[^@/]+@)?([^/]+)/(.+?)(?:\.git)?/?$", remote)
+    if m:
+        return f"https://{m.group(1)}/{m.group(2)}"
+    return None
+
+
+@router.get("/remote")
+def remote_info(project_id: int, db: Session = Depends(get_session)) -> dict:
+    """원격 저장소의 웹 주소 (GitHub 등). 주소에 들어 있는 사용자 이름·토큰은 돌려주지 않는다."""
+    import os
+    import subprocess
+
+    project = db.get(Project, project_id)
+    if project is None or not project.exists:
+        raise HTTPException(404, "프로젝트를 찾을 수 없습니다")
+
+    def git(*args: str) -> str:
+        try:
+            out = subprocess.run(["git", "-C", project.path, *args], capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", timeout=10, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        return out.stdout.strip() if out.returncode == 0 else ""
+
+    remotes = git("remote").split()
+    # upstream(origin/main)의 원격을 먼저, 없으면 origin, 그다음 첫 번째 원격
+    name = project.upstream.split("/", 1)[0] if project.upstream and "/" in project.upstream else None
+    name = name if name in remotes else ("origin" if "origin" in remotes else (remotes[0] if remotes else None))
+    if not name:
+        return {"remote": None, "web_url": None, "branch_url": None, "host": None}
+    url = web_url(git("remote", "get-url", name))
+    branch = project.upstream.split("/", 1)[1] if project.upstream and "/" in project.upstream else None
+    host = url.split("/")[2] if url else None
+    branch_url = f"{url}/tree/{branch}" if url and branch and host in ("github.com", "gitlab.com") else None
+    return {"remote": name, "web_url": url, "branch_url": branch_url, "host": host}
