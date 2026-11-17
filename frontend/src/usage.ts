@@ -38,7 +38,7 @@ export type ProviderInfo = {
 };
 
 export type ServiceStatus = ProviderInfo & {
-  collection: "claude_logs" | "app" | "manual";
+  collection: "claude_logs" | "app" | "manual" | "takeout";
   default_unit: string | null;
   detect: string | null;
   website: string | null;
@@ -148,3 +148,18 @@ export function money(n: number): string {
   if (n > 0) return `$${n.toFixed(3)}`;
   return "$0";
 }
+
+export type TakeoutImport = { file: string; days: number; prompts: number; tokens: number; first: string; last: string; imported_at: string };
+export type TakeoutStatus = { dirs: { path: string; exists: boolean }[]; last_import: TakeoutImport | null };
+
+/** Gemini 앱 사용량: Google Takeout 파일 가져오기 */
+export const takeoutApi = {
+  status: () => request<TakeoutStatus>("/api/usage/takeout"),
+  scan: () => request<TakeoutStatus & { imported: TakeoutImport[] }>("/api/usage/takeout/scan", { method: "POST" }),
+  upload: (file: File) =>
+    request<TakeoutImport>(`/api/usage/takeout?name=${encodeURIComponent(file.name)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: file,
+    }),
+};

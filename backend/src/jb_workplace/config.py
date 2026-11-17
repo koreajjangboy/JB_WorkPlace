@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     def calendar_ics_urls(self) -> list[str]:
         return [u.strip() for u in self.google_calendar_ics_urls.split(",") if u.strip()]
 
+    # ---- Gemini 앱 사용량 (Google Takeout) ----
+    # 이 폴더들에 생기는 takeout-*.zip 을 자동으로 가져온다. 쉼표로 여러 개 지정.
+    # Takeout을 Google Drive로 받고 Drive 데스크톱 앱으로 동기화하면 'G:\내 드라이브\Takeout' 에 생긴다.
+    takeout_dirs: str = str(Path.home() / "Downloads") + r",G:\내 드라이브\Takeout,G:\My Drive\Takeout"
+
+    @property
+    def takeout_dir_paths(self) -> list[Path]:
+        return [Path(p.strip()) for p in self.takeout_dirs.split(",") if p.strip()]
+
     @property
     def scan_root_paths(self) -> list[Path]:
         return [Path(p.strip()) for p in self.scan_roots.split(",") if p.strip()]

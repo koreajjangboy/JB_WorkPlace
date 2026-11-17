@@ -21,6 +21,8 @@ CATALOG: list[dict[str, Any]] = [
     {"name": "gemini", "display_name": "Gemini", "kind": "text", "default_unit": "token", "collection": "app",
      "detect": r"google\.genai|google\.generativeai|@google/genai|@google/generative-ai|GEMINI_API_KEY", "helper": "record_gemini",
      "website": "https://ai.google.dev/pricing"},
+    {"name": "gemini-app", "display_name": "Gemini 앱", "kind": "text", "default_unit": "token", "collection": "takeout",
+     "detect": None, "helper": "takeout", "website": "https://takeout.google.com"},
     {"name": "openai", "display_name": "OpenAI", "kind": "text", "default_unit": "token", "collection": "app",
      "detect": r"from openai|import openai|OPENAI_API_KEY|\"openai\"", "helper": "record_openai",
      "website": "https://openai.com/api/pricing"},

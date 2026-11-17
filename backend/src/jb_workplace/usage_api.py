@@ -4,7 +4,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlmodel import Session, select
@@ -257,7 +257,7 @@ class ProviderOut(BaseModel):
 
 
 KIND_PATTERN = "^(text|image|video|audio|embedding|mixed)$"
-COLLECTION_PATTERN = "^(claude_logs|app|manual)$"
+COLLECTION_PATTERN = "^(claude_logs|app|manual|takeout)$"
 
 
 class ProviderPatch(BaseModel):
@@ -462,3 +462,38 @@ def delete_price(rule_id: int, db: Session = Depends(get_session)) -> None:
         raise HTTPException(404, "단가를 찾을 수 없습니다")
     db.delete(rule)
     db.commit()
+
+
+# ---------------------------------------------------------------- Gemini 앱 (Google Takeout)
+
+
+@router.get("/takeout")
+def takeout_status() -> dict:
+    """지켜보는 폴더와 마지막으로 가져온 결과."""
+    from . import takeout
+
+    return takeout.status()
+
+
+@router.post("/takeout")
+async def takeout_upload(request: Request, name: str = Query("upload", max_length=200)) -> dict:
+    """Takeout zip(또는 활동 JSON)을 본문 그대로 받아 가져온다."""
+    from starlette.concurrency import run_in_threadpool
+
+    from . import takeout
+
+    data = await request.body()
+    if not data:
+        raise HTTPException(400, "파일이 비어 있습니다")
+    try:
+        return await run_in_threadpool(takeout.import_bytes, data, name)
+    except takeout.TakeoutError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@router.post("/takeout/scan")
+def takeout_scan() -> dict:
+    """지켜보는 폴더를 지금 확인한다."""
+    from . import takeout
+
+    return {"imported": takeout.scan_dirs(), **takeout.status()}

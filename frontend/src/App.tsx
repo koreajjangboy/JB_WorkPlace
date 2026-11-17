@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { NavLink, Outlet } from "react-router";
 import { api } from "./api";
+import { BookmarksMenu } from "./BookmarksMenu";
 import { relativeTime } from "./format";
 import { useAsync } from "./useAsync";
 
@@ -51,6 +52,7 @@ export default function App() {
             <NavLink to="/usage" className={navClass}>
               사용량
             </NavLink>
+            <BookmarksMenu />
             <NavLink to="/settings" className={navClass}>
               설정
             </NavLink>

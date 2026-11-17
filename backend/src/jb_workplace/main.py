@@ -32,6 +32,9 @@ async def lifespan(app: FastAPI):
     except Exception:
         log.exception("중단된 실행 정리 실패")
     threading.Thread(target=_scan_in_background, daemon=True).start()
+    from .takeout import watch_forever
+
+    threading.Thread(target=watch_forever, daemon=True).start()  # Gemini 앱 Takeout 폴더 확인
     yield
 
 
