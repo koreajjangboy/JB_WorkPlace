@@ -151,6 +151,92 @@ def summary(
     }
 
 
+def _month_start(d: datetime, back: int) -> datetime:
+    y, m = d.year, d.month - back
+    while m <= 0:
+        m += 12
+        y -= 1
+    return d.replace(year=y, month=m, day=1)
+
+
+@router.get("/overview")
+def overview(
+    days: int = Query(7, ge=1, le=60),
+    kind: str = Query("all", pattern="^(all|text|media)$"),
+    db: Session = Depends(get_session),
+) -> dict:
+    """한 차트용 묶음: 최근 3달(월별 일평균) · 최근 4주(주별 일평균) · 최근 N일(일별).
+
+    월·주 막대는 그 기간 비용 ÷ 지난 날 수 (이번 달·이번 주는 오늘까지의 날 수)라서
+    일별 막대와 같은 '하루 비용' 기준으로 비교할 수 있다.
+    """
+    now = datetime.now().astimezone()
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow = today + timedelta(days=1)
+
+    buckets: list[dict[str, Any]] = []
+    for back in (2, 1, 0):
+        start = _month_start(today, back)
+        end = min(_month_start(today, back - 1) if back else tomorrow, tomorrow)
+        buckets.append({"group": "month", "label": f"M {start.month}", "start": start, "end": end})
+    this_monday = today - timedelta(days=today.weekday())
+    for back in (3, 2, 1, 0):
+        start = this_monday - timedelta(weeks=back)
+        end = min(start + timedelta(days=7), tomorrow)
+        buckets.append({"group": "week", "label": f"W {start.isocalendar().week}", "start": start, "end": end})
+    for back in range(days - 1, -1, -1):
+        start = today - timedelta(days=back)
+        buckets.append({"group": "day", "label": f"{start.month}/{start.day}", "start": start, "end": start + timedelta(days=1)})
+    for b in buckets:
+        b["days"] = max(1, round((b["end"] - b["start"]).total_seconds() / 86400))
+
+    earliest = min(b["start"] for b in buckets)
+    providers = {p.id: p for p in db.exec(select(Provider)).all()}
+    book = PriceBook(db)
+    records = db.exec(select(UsageRecord).where(UsageRecord.ts >= earliest)).all()
+
+    per: dict[int, dict[str, Any]] = {}
+    for r in records:
+        provider = providers.get(r.provider_id)
+        if provider is None or not _kind_ok(r.kind or provider.kind, kind):
+            continue
+        cost = book.cost(r)
+        ts = r.ts.astimezone()
+        p = per.setdefault(r.provider_id, {"totals": [0.0] * len(buckets), "missing_price": False})
+        if cost is None:
+            p["missing_price"] = True
+            continue
+        for i, b in enumerate(buckets):
+            if b["start"] <= ts < b["end"]:
+                p["totals"][i] += cost
+
+    out = []
+    for pid, p in per.items():
+        provider = providers[pid]
+        values = [round(t / b["days"], 6) for t, b in zip(p["totals"], buckets)]
+        selected = sum(t for t, b in zip(p["totals"], buckets) if b["group"] == "day")
+        out.append({
+            "id": pid,
+            "name": provider.name,
+            "display_name": provider.display_name or provider.name,
+            "kind": provider.kind,
+            "color": provider.color,
+            "missing_price": p["missing_price"],
+            "values": values,
+            "selected_cost": round(selected, 6),
+        })
+    out.sort(key=lambda x: -x["selected_cost"])
+    return {
+        "days": days,
+        "kind": kind,
+        "buckets": [
+            {"group": b["group"], "label": b["label"], "start": b["start"].date().isoformat(), "days": b["days"]}
+            for b in buckets
+        ],
+        "providers": out,
+    }
+
+
 # ---------------------------------------------------------------- provider와 단가표
 
 

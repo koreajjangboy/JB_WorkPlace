@@ -1,9 +1,42 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
+import { request } from "./api";
 import { Badge, Card, Empty, ErrorBox } from "./components";
+import { OverviewChart, type OverviewBucket, type OverviewSeries } from "./OverviewChart";
 import { useAsync } from "./useAsync";
-import { Sparkline, UsageChart, type AverageLine } from "./UsageChart";
-import { OTHER_COLOR, money, topProviders, usageApi, type UsageProvider } from "./usage";
+import { Sparkline } from "./UsageChart";
+import { OTHER_COLOR, TOP_N, money, usageApi, type UsageProvider } from "./usage";
+
+type OverviewProvider = {
+  id: number;
+  name: string;
+  display_name: string;
+  kind: string;
+  color: string | null;
+  missing_price: boolean;
+  values: number[];
+  selected_cost: number;
+};
+type Overview = { days: number; kind: string; buckets: OverviewBucket[]; providers: OverviewProvider[] };
+
+const FALLBACK = ["#D85A30", "#7F77DD", "#1D9E75", "#D4537E", "#378ADD", "#BA7517", "#639922"];
+const HIDDEN_KEY = "usage.hiddenProviders";
+
+function loadHidden(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveHidden(hidden: Set<string>) {
+  try {
+    localStorage.setItem(HIDDEN_KEY, JSON.stringify([...hidden]));
+  } catch {
+    /* 저장 못 해도 이번 화면에서는 적용된다 */
+  }
+}
 
 function Seg<T extends string | number>({ value, options, onChange }: { value: T; options: [T, string][]; onChange: (v: T) => void }) {
   return (
@@ -38,43 +71,56 @@ function Row({ p, color, total }: { p: UsageProvider; color: string; total: numb
 
 export type UsageDays = 7 | 15 | 30;
 
-const AVG_LONG_DAYS = 90; // 최근 3달
-const AVG_SHORT_DAYS = 28; // 최근 4주
-const AVG_LONG_COLOR = "#E24B4A";
-const AVG_SHORT_COLOR = "#378ADD";
-
-/** 90일 일별 합계에서 최근 3달·4주 일평균을 구한다. */
-function dailyAverages(providers: UsageProvider[], length: number) {
-  const totals = Array.from({ length }, (_, i) => providers.reduce((s, p) => s + (p.series[i] ?? 0), 0));
-  const avg = (n: number) => totals.slice(-n).reduce((s, v) => s + v, 0) / Math.min(n, Math.max(1, totals.length));
-  return { long: avg(AVG_LONG_DAYS), short: avg(AVG_SHORT_DAYS) };
-}
-
-/** 홈 화면의 AI 사용량: 비용 기준, 상위 5개 provider + 기타, 3달·4주 일평균 기준선. */
+/**
+ * 홈 화면의 AI 사용량.
+ * 한 차트에 최근 3달(월별 일평균) · 최근 4주(주별 일평균) · 선택 기간(일별)을 빈 칸으로 나눠 보여주고,
+ * 서비스를 골라 볼 수 있다.
+ */
 export default function UsageSection({ days, onDaysChange }: { days: UsageDays; onDaysChange: (d: UsageDays) => void }) {
   const [kind, setKind] = useState<"all" | "text" | "media">("all");
   const [showAll, setShowAll] = useState(false);
-  const { data, error, loading } = useAsync(() => usageApi.summary(days, kind), [days, kind]);
-  const longRange = useAsync(() => usageApi.summary(AVG_LONG_DAYS, kind), [kind]);
+  const [hidden, setHidden] = useState<Set<string>>(loadHidden);
+  const overview = useAsync(() => request<Overview>(`/api/usage/overview?days=${days}&kind=${kind}`), [days, kind]);
+  const summary = useAsync(() => usageApi.summary(days, kind), [days, kind]);
 
-  const avg = useMemo(
-    () => (longRange.data ? dailyAverages(longRange.data.providers, longRange.data.labels.length) : null),
-    [longRange.data],
-  );
-  const averages = useMemo<AverageLine[]>(
-    () =>
-      avg
-        ? [
-            { label: "최근 3달 일평균", value: avg.long, color: AVG_LONG_COLOR, dash: [6, 4] },
-            { label: "최근 4주 일평균", value: avg.short, color: AVG_SHORT_COLOR, dash: [2, 3] },
-          ]
-        : [],
-    [avg],
-  );
+  // 서비스마다 고정 색 (가려도 다른 서비스 색이 바뀌지 않게)
+  const colorOf = useMemo(() => {
+    const map = new Map<string, string>();
+    (overview.data?.providers ?? []).forEach((p, i) => map.set(p.name, p.color || FALLBACK[i % FALLBACK.length]));
+    return (name: string) => map.get(name) ?? OTHER_COLOR;
+  }, [overview.data]);
 
-  const { top, rest } = topProviders(data?.providers ?? []);
-  const missing = (data?.providers ?? []).filter((p) => p.missing_price);
-  const shown = showAll ? [...top, ...rest.map((p) => ({ ...p, color: OTHER_COLOR }))] : top;
+  const visible = useMemo(() => (overview.data?.providers ?? []).filter((p) => !hidden.has(p.name)), [overview.data, hidden]);
+
+  const series = useMemo<OverviewSeries[]>(() => {
+    const top = visible.slice(0, TOP_N).map((p) => ({ label: p.display_name, color: colorOf(p.name), values: p.values }));
+    const rest = visible.slice(TOP_N);
+    if (rest.length && overview.data) {
+      top.push({
+        label: `기타 ${rest.length}개`,
+        color: OTHER_COLOR,
+        values: overview.data.buckets.map((_, i) => rest.reduce((s, p) => s + (p.values[i] ?? 0), 0)),
+      });
+    }
+    return top;
+  }, [visible, colorOf, overview.data]);
+
+  function toggle(name: string) {
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      saveHidden(next);
+      return next;
+    });
+  }
+
+  const ranking = (summary.data?.providers ?? []).filter((p) => !hidden.has(p.name));
+  const rankingTotal = ranking.reduce((s, p) => s + p.cost, 0);
+  const shownRanking = showAll ? ranking : ranking.slice(0, TOP_N);
+  const missing = (summary.data?.providers ?? []).filter((p) => p.missing_price);
+  const allProviders = overview.data?.providers ?? [];
+  const error = overview.error || summary.error;
 
   return (
     <Card
@@ -95,51 +141,64 @@ export default function UsageSection({ days, onDaysChange }: { days: UsageDays; 
           단가가 없는 provider {missing.length}개: {missing.map((p) => p.display_name).join(", ")} · 단가를 넣으면 비용에 포함됩니다 →
         </Link>
       )}
-      {loading && !data ? (
+
+      {allProviders.length > 0 && (
+        <div className="mb-3 flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-[11px] text-zinc-500">서비스</span>
+          {allProviders.map((p) => {
+            const on = !hidden.has(p.name);
+            return (
+              <button
+                key={p.id}
+                onClick={() => toggle(p.name)}
+                aria-pressed={on}
+                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs ${
+                  on ? "border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200" : "border-zinc-200 text-zinc-400 line-through dark:border-zinc-800 dark:text-zinc-600"
+                }`}
+              >
+                <span className="h-2 w-2 rounded-sm" style={{ background: on ? colorOf(p.name) : "transparent", border: `1px solid ${colorOf(p.name)}` }} />
+                {p.display_name}
+              </button>
+            );
+          })}
+          {hidden.size > 0 && (
+            <button
+              onClick={() => {
+                const next = new Set<string>();
+                saveHidden(next);
+                setHidden(next);
+              }}
+              className="text-xs text-blue-600 hover:underline dark:text-blue-400"
+            >
+              모두 보기
+            </button>
+          )}
+        </div>
+      )}
+
+      {overview.loading && !overview.data ? (
         <p className="py-10 text-center text-sm text-zinc-500">불러오는 중…</p>
-      ) : !data || data.providers.length === 0 ? (
-        <Empty>이 기간에 기록된 사용량이 없습니다.</Empty>
+      ) : !overview.data || allProviders.length === 0 ? (
+        <Empty>기록된 사용량이 없습니다.</Empty>
+      ) : visible.length === 0 ? (
+        <Empty>보여 줄 서비스를 하나 이상 고르세요.</Empty>
       ) : (
-        <div className="grid grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
-          <div>
-            <div className="mb-1.5 flex flex-wrap gap-2.5 text-[11px] text-zinc-500">
-              {top.map((p) => (
-                <span key={p.id} className="flex items-center gap-1">
-                  <span className="h-2 w-2 rounded-sm" style={{ background: p.color! }} />
-                  {p.display_name}
-                </span>
-              ))}
-              {rest.length > 0 && (
-                <span className="flex items-center gap-1">
-                  <span className="h-2 w-2 rounded-sm" style={{ background: OTHER_COLOR }} />
-                  기타 {rest.length}개
-                </span>
-              )}
-              {averages.map((a) => (
-                <span key={a.label} className="flex items-center gap-1">
-                  <svg width="14" height="4" aria-hidden="true">
-                    <line x1="0" y1="2" x2="14" y2="2" stroke={a.color} strokeWidth="1.5" strokeDasharray={a.dash?.join(" ")} />
-                  </svg>
-                  {a.label} {money(a.value)}
-                </span>
-              ))}
-            </div>
-            <UsageChart labels={data.labels} providers={data.providers} averages={averages} />
-          </div>
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+          <OverviewChart buckets={overview.data.buckets} series={series} />
           <div>
             <div className="grid grid-cols-[minmax(0,1fr)_60px_64px_34px] gap-2 pb-1 text-[11px] text-zinc-500">
-              <span>Provider</span>
+              <span>최근 {days}일</span>
               <span>추이</span>
               <span className="text-right">비용</span>
               <span className="text-right">%</span>
             </div>
-            {shown.map((p) => (
-              <Row key={p.id} p={p} color={p.color || OTHER_COLOR} total={data.total_cost} />
+            {shownRanking.map((p) => (
+              <Row key={p.id} p={p} color={colorOf(p.name)} total={rankingTotal} />
             ))}
             <div className="mt-2 flex items-center justify-between text-xs">
-              {rest.length > 0 ? (
+              {ranking.length > TOP_N ? (
                 <button onClick={() => setShowAll(!showAll)} className="text-blue-600 hover:underline dark:text-blue-400">
-                  {showAll ? "상위 5개만 보기" : `나머지 ${rest.length}개 보기`}
+                  {showAll ? "상위 5개만 보기" : `나머지 ${ranking.length - TOP_N}개 보기`}
                 </button>
               ) : (
                 <span />
@@ -152,7 +211,8 @@ export default function UsageSection({ days, onDaysChange }: { days: UsageDays; 
         </div>
       )}
       <p className="mt-3 text-[11px] text-zinc-500">
-        비용은 API 단가로 환산한 값입니다. Claude는 Team 플랜 사용 한도에서 차감되며 따로 청구되지 않습니다.
+        월·주 막대는 그 기간의 하루 평균 비용입니다 (이번 달·이번 주는 오늘까지 기준). 비용은 API 단가로 환산한 값이며, Claude는 Team 플랜 사용
+        한도에서 차감되고 따로 청구되지 않습니다.
       </p>
     </Card>
   );
