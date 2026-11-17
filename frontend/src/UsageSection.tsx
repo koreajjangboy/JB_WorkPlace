@@ -69,19 +69,10 @@ function Row({ p, color, total }: { p: UsageProvider; color: string; total: numb
   );
 }
 
-export type UsageDays = 7 | 15 | 30;
-
-/**
- * 홈 화면의 AI 사용량.
- * 한 차트에 최근 3달(월별 일평균) · 최근 4주(주별 일평균) · 선택 기간(일별)을 빈 칸으로 나눠 보여주고,
- * 서비스를 골라 볼 수 있다.
- */
-export default function UsageSection({ days, onDaysChange }: { days: UsageDays; onDaysChange: (d: UsageDays) => void }) {
-  const [kind, setKind] = useState<"all" | "text" | "media">("all");
-  const [showAll, setShowAll] = useState(false);
+/** 월·주·일 묶음 차트 데이터와 서비스 선택(가리기) 상태. 홈과 사용량 화면이 같이 쓴다. */
+export function useUsageOverview(days: number, kind: string) {
   const [hidden, setHidden] = useState<Set<string>>(loadHidden);
   const overview = useAsync(() => request<Overview>(`/api/usage/overview?days=${days}&kind=${kind}`), [days, kind]);
-  const summary = useAsync(() => usageApi.summary(days, kind), [days, kind]);
 
   // 서비스마다 고정 색 (가려도 다른 서비스 색이 바뀌지 않게)
   const colorOf = useMemo(() => {
@@ -115,6 +106,75 @@ export default function UsageSection({ days, onDaysChange }: { days: UsageDays; 
     });
   }
 
+  function showAllServices() {
+    const next = new Set<string>();
+    saveHidden(next);
+    setHidden(next);
+  }
+
+  return { overview, hidden, colorOf, visible, series, toggle, showAllServices };
+}
+
+type UsageOverview = ReturnType<typeof useUsageOverview>;
+
+/** 서비스 선택 칩 */
+export function ServiceChips({ o }: { o: UsageOverview }) {
+  const all = o.overview.data?.providers ?? [];
+  if (all.length === 0) return null;
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-1.5">
+      <span className="mr-1 text-[11px] text-zinc-500">서비스</span>
+      {all.map((p) => {
+        const on = !o.hidden.has(p.name);
+        return (
+          <button
+            key={p.id}
+            onClick={() => o.toggle(p.name)}
+            aria-pressed={on}
+            className={`flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs ${
+              on ? "border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200" : "border-zinc-200 text-zinc-400 line-through dark:border-zinc-800 dark:text-zinc-600"
+            }`}
+          >
+            <span className="h-2 w-2 rounded-sm" style={{ background: on ? o.colorOf(p.name) : "transparent", border: `1px solid ${o.colorOf(p.name)}` }} />
+            {p.display_name}
+          </button>
+        );
+      })}
+      {o.hidden.size > 0 && (
+        <button onClick={o.showAllServices} className="text-xs text-blue-600 hover:underline dark:text-blue-400">
+          모두 보기
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** 월·주·일 묶음 차트. 불러오는 중이거나 그릴 것이 없으면 안내 문구를 보여 준다. */
+export function UsageOverviewChart({ o, height }: { o: UsageOverview; height?: number }) {
+  const data = o.overview.data;
+  if (o.overview.loading && !data) return <p className="py-10 text-center text-sm text-zinc-500">불러오는 중…</p>;
+  if (!data || data.providers.length === 0) return <Empty>기록된 사용량이 없습니다.</Empty>;
+  if (o.visible.length === 0) return <Empty>보여 줄 서비스를 하나 이상 고르세요.</Empty>;
+  return <OverviewChart buckets={data.buckets} series={o.series} height={height} />;
+}
+
+export const OVERVIEW_NOTE =
+  "월·주 막대는 그 기간의 하루 평균 비용입니다 (이번 달·이번 주는 오늘까지 기준). 비용은 API 단가로 환산한 값이며, Claude는 Team 플랜 사용 한도에서 차감되고 따로 청구되지 않습니다.";
+
+export type UsageDays = 7 | 15 | 30;
+
+/**
+ * 홈 화면의 AI 사용량.
+ * 한 차트에 최근 3달(월별 일평균) · 최근 4주(주별 일평균) · 선택 기간(일별)을 빈 칸으로 나눠 보여주고,
+ * 서비스를 골라 볼 수 있다.
+ */
+export default function UsageSection({ days, onDaysChange }: { days: UsageDays; onDaysChange: (d: UsageDays) => void }) {
+  const [kind, setKind] = useState<"all" | "text" | "media">("all");
+  const [showAll, setShowAll] = useState(false);
+  const o = useUsageOverview(days, kind);
+  const { overview, hidden, colorOf, visible } = o;
+  const summary = useAsync(() => usageApi.summary(days, kind), [days, kind]);
+
   const ranking = (summary.data?.providers ?? []).filter((p) => !hidden.has(p.name));
   const rankingTotal = ranking.reduce((s, p) => s + p.cost, 0);
   const shownRanking = showAll ? ranking : ranking.slice(0, TOP_N);
@@ -142,49 +202,13 @@ export default function UsageSection({ days, onDaysChange }: { days: UsageDays; 
         </Link>
       )}
 
-      {allProviders.length > 0 && (
-        <div className="mb-3 flex flex-wrap items-center gap-1.5">
-          <span className="mr-1 text-[11px] text-zinc-500">서비스</span>
-          {allProviders.map((p) => {
-            const on = !hidden.has(p.name);
-            return (
-              <button
-                key={p.id}
-                onClick={() => toggle(p.name)}
-                aria-pressed={on}
-                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs ${
-                  on ? "border-zinc-400 text-zinc-800 dark:border-zinc-600 dark:text-zinc-200" : "border-zinc-200 text-zinc-400 line-through dark:border-zinc-800 dark:text-zinc-600"
-                }`}
-              >
-                <span className="h-2 w-2 rounded-sm" style={{ background: on ? colorOf(p.name) : "transparent", border: `1px solid ${colorOf(p.name)}` }} />
-                {p.display_name}
-              </button>
-            );
-          })}
-          {hidden.size > 0 && (
-            <button
-              onClick={() => {
-                const next = new Set<string>();
-                saveHidden(next);
-                setHidden(next);
-              }}
-              className="text-xs text-blue-600 hover:underline dark:text-blue-400"
-            >
-              모두 보기
-            </button>
-          )}
-        </div>
-      )}
+      <ServiceChips o={o} />
 
-      {overview.loading && !overview.data ? (
-        <p className="py-10 text-center text-sm text-zinc-500">불러오는 중…</p>
-      ) : !overview.data || allProviders.length === 0 ? (
-        <Empty>기록된 사용량이 없습니다.</Empty>
-      ) : visible.length === 0 ? (
-        <Empty>보여 줄 서비스를 하나 이상 고르세요.</Empty>
+      {!overview.data || allProviders.length === 0 || visible.length === 0 ? (
+        <UsageOverviewChart o={o} />
       ) : (
         <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
-          <OverviewChart buckets={overview.data.buckets} series={series} />
+          <UsageOverviewChart o={o} />
           <div>
             <div className="grid grid-cols-[minmax(0,1fr)_60px_64px_34px] gap-2 pb-1 text-[11px] text-zinc-500">
               <span>최근 {days}일</span>
@@ -210,10 +234,7 @@ export default function UsageSection({ days, onDaysChange }: { days: UsageDays; 
           </div>
         </div>
       )}
-      <p className="mt-3 text-[11px] text-zinc-500">
-        월·주 막대는 그 기간의 하루 평균 비용입니다 (이번 달·이번 주는 오늘까지 기준). 비용은 API 단가로 환산한 값이며, Claude는 Team 플랜 사용
-        한도에서 차감되고 따로 청구되지 않습니다.
-      </p>
+      <p className="mt-3 text-[11px] text-zinc-500">{OVERVIEW_NOTE}</p>
     </Card>
   );
 }

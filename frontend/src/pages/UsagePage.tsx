@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { Badge, Button, Card, Empty, ErrorBox, Loading } from "../components";
+import { Badge, Button, Card, ErrorBox, Loading } from "../components";
 import { useAsync } from "../useAsync";
-import { UsageChart } from "../UsageChart";
+import { OVERVIEW_NOTE, ServiceChips, UsageOverviewChart, useUsageOverview } from "../UsageSection";
 import { UNIT_LABEL, formatQuantity, money, usageApi, type PriceRule, type ProviderInfo, type UsageProvider } from "../usage";
 
 const KINDS: [string, string][] = [
@@ -190,10 +190,12 @@ export default function UsagePage() {
   const [kind, setKind] = useState("all");
   const summary = useAsync(() => usageApi.summary(days, kind), [days, kind]);
   const meta = useAsync(() => Promise.all([usageApi.providers(), usageApi.prices()]), []);
+  const o = useUsageOverview(days, kind);
 
   function reloadAll() {
     summary.reload();
     meta.reload();
+    o.overview.reload();
   }
 
   const byId = useMemo(() => new Map((summary.data?.providers ?? []).map((p) => [p.id, p])), [summary.data]);
@@ -219,13 +221,16 @@ export default function UsagePage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="mr-2 text-lg font-semibold">사용량</h1>
-        {[7, 30, 90].map((d) => seg(d, days, () => setDays(d), `${d}일`))}
+        {[7, 15, 30].map((d) => seg(d, days, () => setDays(d), `${d}일`))}
         <span className="mx-1 text-zinc-300">|</span>
         {[["all", "전체"], ["text", "텍스트"], ["media", "미디어"]].map(([k, label]) => seg(k, kind, () => setKind(k), label))}
       </div>
 
-      <Card title={`일별 비용 · 합계 ${money(s.total_cost)}`} action={<span className="text-xs text-zinc-500">지난 {days}일 {money(s.prev_total_cost)}</span>}>
-        {s.providers.length === 0 ? <Empty>이 기간에 기록된 사용량이 없습니다.</Empty> : <UsageChart labels={s.labels} providers={s.providers} height={260} />}
+      <Card title={`하루 비용 · 최근 ${days}일 합계 ${money(s.total_cost)}`} action={<span className="text-xs text-zinc-500">그 전 {days}일 {money(s.prev_total_cost)}</span>}>
+        {o.overview.error && <ErrorBox message={o.overview.error} />}
+        <ServiceChips o={o} />
+        <UsageOverviewChart o={o} height={300} />
+        <p className="mt-3 text-[11px] text-zinc-500">{OVERVIEW_NOTE}</p>
       </Card>
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-3 md:grid-cols-2 xl:grid-cols-3">
