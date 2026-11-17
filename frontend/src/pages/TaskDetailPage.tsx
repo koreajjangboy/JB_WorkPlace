@@ -188,6 +188,41 @@ function RunView({ run, index, onChange }: { run: Run; index: number; onChange: 
   );
 }
 
+/** 이 작업의 Claude 세션을 터미널에서 이어서 여는 명령을 복사한다. */
+function ResumeInTerminal({ path, sessionId, disabled }: { path: string; sessionId: string; disabled: boolean }) {
+  const [copied, setCopied] = useState(false);
+  const [show, setShow] = useState(false);
+  const command = `cd "${path}"; claude --resume ${sessionId}`;
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setShow(true); // 복사가 막혀 있으면 명령을 보여 주고 직접 복사하게 한다
+    }
+  }
+
+  return (
+    <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
+      <button onClick={copy} className="text-blue-600 hover:underline dark:text-blue-400" title={command}>
+        {copied ? "복사했습니다 · 터미널에 붙여 넣으세요" : "터미널에서 이어서 하기 (명령 복사)"}
+      </button>{" "}
+      <button onClick={() => setShow(!show)} className="text-zinc-500 hover:underline">
+        {show ? "숨기기" : "명령 보기"}
+      </button>
+      {disabled && <span className="ml-1 text-amber-700 dark:text-amber-400">· 실행이 끝난 뒤에 여세요</span>}
+      {show && (
+        <code className="mt-1 block rounded bg-zinc-100 px-2 py-1 font-mono text-[11px] select-all [overflow-wrap:anywhere] dark:bg-zinc-800">
+          {command}
+        </code>
+      )}
+      {show && <p className="mt-1 text-[11px] text-zinc-500">터미널에서는 WorkPlace의 제한 모드가 아니라 평소 Claude Code 설정(권한 포함)으로 이어집니다.</p>}
+    </div>
+  );
+}
+
 export default function TaskDetailPage() {
   const id = Number(useParams().taskId);
   const navigate = useNavigate();
@@ -291,6 +326,7 @@ export default function TaskDetailPage() {
             )}
           </div>
         )}
+        {task.session_id && task.project_path && <ResumeInTerminal path={task.project_path} sessionId={task.session_id} disabled={running} />}
         {limitsDraft && runner.data && (
           <div className="mt-2 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
             <LimitPicker value={limitsDraft} onChange={setLimitsDraft} runner={runner.data} />
