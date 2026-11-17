@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import { Badge, Card, Empty, ErrorBox } from "./components";
 import { useAsync } from "./useAsync";
-import { Sparkline, UsageChart } from "./UsageChart";
+import { Sparkline, UsageChart, type AverageLine } from "./UsageChart";
 import { OTHER_COLOR, money, topProviders, usageApi, type UsageProvider } from "./usage";
 
 function Seg<T extends string | number>({ value, options, onChange }: { value: T; options: [T, string][]; onChange: (v: T) => void }) {
@@ -36,11 +36,41 @@ function Row({ p, color, total }: { p: UsageProvider; color: string; total: numb
   );
 }
 
-/** 홈 화면의 AI 사용량: 비용 기준, 상위 5개 provider + 기타. */
-export default function UsageSection({ days, onDaysChange }: { days: 7 | 30; onDaysChange: (d: 7 | 30) => void }) {
+export type UsageDays = 7 | 15 | 30;
+
+const AVG_LONG_DAYS = 90; // 최근 3달
+const AVG_SHORT_DAYS = 28; // 최근 4주
+const AVG_LONG_COLOR = "#E24B4A";
+const AVG_SHORT_COLOR = "#378ADD";
+
+/** 90일 일별 합계에서 최근 3달·4주 일평균을 구한다. */
+function dailyAverages(providers: UsageProvider[], length: number) {
+  const totals = Array.from({ length }, (_, i) => providers.reduce((s, p) => s + (p.series[i] ?? 0), 0));
+  const avg = (n: number) => totals.slice(-n).reduce((s, v) => s + v, 0) / Math.min(n, Math.max(1, totals.length));
+  return { long: avg(AVG_LONG_DAYS), short: avg(AVG_SHORT_DAYS) };
+}
+
+/** 홈 화면의 AI 사용량: 비용 기준, 상위 5개 provider + 기타, 3달·4주 일평균 기준선. */
+export default function UsageSection({ days, onDaysChange }: { days: UsageDays; onDaysChange: (d: UsageDays) => void }) {
   const [kind, setKind] = useState<"all" | "text" | "media">("all");
   const [showAll, setShowAll] = useState(false);
   const { data, error, loading } = useAsync(() => usageApi.summary(days, kind), [days, kind]);
+  const longRange = useAsync(() => usageApi.summary(AVG_LONG_DAYS, kind), [kind]);
+
+  const avg = useMemo(
+    () => (longRange.data ? dailyAverages(longRange.data.providers, longRange.data.labels.length) : null),
+    [longRange.data],
+  );
+  const averages = useMemo<AverageLine[]>(
+    () =>
+      avg
+        ? [
+            { label: "최근 3달 일평균", value: avg.long, color: AVG_LONG_COLOR, dash: [6, 4] },
+            { label: "최근 4주 일평균", value: avg.short, color: AVG_SHORT_COLOR, dash: [2, 3] },
+          ]
+        : [],
+    [avg],
+  );
 
   const { top, rest } = topProviders(data?.providers ?? []);
   const missing = (data?.providers ?? []).filter((p) => p.missing_price);
@@ -52,7 +82,7 @@ export default function UsageSection({ days, onDaysChange }: { days: 7 | 30; onD
       action={
         <div className="flex flex-wrap items-center gap-1.5">
           <Seg value={kind} onChange={setKind} options={[["all", "전체"], ["text", "텍스트"], ["media", "미디어"]]} />
-          <Seg value={days} onChange={onDaysChange} options={[[7, "7일"], [30, "30일"]]} />
+          <Seg value={days} onChange={onDaysChange} options={[[7, "7일"], [15, "15일"], [30, "30일"]]} />
         </div>
       }
     >
@@ -85,8 +115,16 @@ export default function UsageSection({ days, onDaysChange }: { days: 7 | 30; onD
                   기타 {rest.length}개
                 </span>
               )}
+              {averages.map((a) => (
+                <span key={a.label} className="flex items-center gap-1">
+                  <svg width="14" height="4" aria-hidden="true">
+                    <line x1="0" y1="2" x2="14" y2="2" stroke={a.color} strokeWidth="1.5" strokeDasharray={a.dash?.join(" ")} />
+                  </svg>
+                  {a.label} {money(a.value)}
+                </span>
+              ))}
             </div>
-            <UsageChart labels={data.labels} providers={data.providers} />
+            <UsageChart labels={data.labels} providers={data.providers} averages={averages} />
           </div>
           <div>
             <div className="grid grid-cols-[minmax(0,1fr)_60px_64px_34px] gap-2 pb-1 text-[11px] text-zinc-500">

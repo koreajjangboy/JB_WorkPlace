@@ -5,12 +5,12 @@ import { Card, Empty, ErrorBox, Loading, SessionRow, Stat } from "../components"
 import { relativeTime } from "../format";
 import { RateLimitView } from "../limits";
 import { money, usageApi } from "../usage";
-import UsageSection from "../UsageSection";
+import UsageSection, { type UsageDays } from "../UsageSection";
 import { useAsync } from "../useAsync";
 import { TaskRow } from "./TasksPage";
 
 export default function HomePage() {
-  const [days, setDays] = useState<7 | 30>(7);
+  const [days, setDays] = useState<UsageDays>(7);
   const { data, error, loading } = useAsync(
     () =>
       Promise.all([
