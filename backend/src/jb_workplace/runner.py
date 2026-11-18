@@ -52,6 +52,57 @@ def extract_commit_message(text: str) -> str | None:
     return blocks[-1].strip() or None if blocks else None
 
 
+# 다른 프로젝트(또는 이 프로젝트)에 작업을 추가하는 통로. Claude는 제안만 하고, 사람이 확인한 뒤 등록한다.
+TASKS_HINT = (
+    "JB WorkPlace can also hold tasks for other projects. You cannot create tasks yourself. "
+    "Only when the user asks you to add or create tasks, end your final message with a fenced code "
+    "block whose language is `workplace-tasks` containing a JSON array of objects with keys "
+    '"project" (exact project name from the list below), "title" (short) and "prompt" (the full '
+    "instruction). Each proposed task runs later in its own project folder and cannot see this "
+    "conversation or this folder, so write each prompt so it stands on its own (name the files to read "
+    "and the output to write). The user reviews and registers the proposals. Do not create the tasks "
+    "any other way. Registered projects: "
+)
+_TASKS_BLOCK = re.compile(r"```workplace-tasks[^\n]*\n(.*?)```", re.DOTALL)
+MAX_PROPOSALS = 30
+MAX_HINT_PROJECTS = 200
+
+
+def tasks_hint(project_names: list[str]) -> str:
+    names = sorted(set(project_names), key=str.lower)[:MAX_HINT_PROJECTS]
+    return TASKS_HINT + (", ".join(json.dumps(n, ensure_ascii=False) for n in names) or "(none)") + "."
+
+
+def extract_task_proposals(text: str) -> list[dict[str, Any]] | None:
+    """마지막 ```workplace-tasks 블록의 JSON 배열을 읽는다. 형식이 틀리면 None."""
+    blocks = _TASKS_BLOCK.findall(text or "")
+    if not blocks:
+        return None
+    try:
+        data = json.loads(blocks[-1])
+    except ValueError:
+        log.info("workplace-tasks 블록의 JSON을 읽지 못함")
+        return None
+    if isinstance(data, dict):
+        data = data.get("tasks")
+    if not isinstance(data, list):
+        return None
+    out = []
+    for item in data[:MAX_PROPOSALS]:
+        if not isinstance(item, dict):
+            continue
+        prompt = str(item.get("prompt") or "").strip()[:20000]
+        if not prompt:
+            continue
+        out.append({
+            "project": str(item.get("project") or "").strip()[:200],
+            "title": str(item.get("title") or "").strip()[:200] or make_title(prompt),
+            "prompt": prompt,
+            "task_id": None,
+        })
+    return out or None
+
+
 class RunnerError(Exception):
     """실행을 시작할 수 없을 때 (사용자에게 그대로 보여줄 메시지)."""
 
@@ -87,7 +138,7 @@ def effective_limits(task: Task) -> tuple[float, int]:
     return min(budget, MAX_BUDGET_CAP_USD), min(minutes, MAX_MINUTES_CAP)
 
 
-def _build_args(exe: str, task: Task, resume: str | None, budget: float) -> list[str]:
+def _build_args(exe: str, task: Task, resume: str | None, budget: float, project_names: list[str]) -> list[str]:
     s = get_settings()
     args = [
         exe, "-p",
@@ -100,7 +151,7 @@ def _build_args(exe: str, task: Task, resume: str | None, budget: float) -> list
         "--disallowedTools", s.runner_disallowed_tools,
         "--max-budget-usd", f"{budget:g}",
         "--name", f"WorkPlace #{task.id}: {task.title}"[:120],
-        "--append-system-prompt", COMMIT_HINT,
+        "--append-system-prompt", COMMIT_HINT + "\n\n" + tasks_hint(project_names),
     ]
     if s.runner_model:
         args += ["--model", s.runner_model]
@@ -164,7 +215,10 @@ def start_run(task_id: int, prompt: str | None = None) -> Run:
             db.refresh(run)
             db.refresh(task)
             run_id, cwd = run.id, project.path
-            args = _build_args(exe, task, resume, budget)
+            project_names = list(db.exec(
+                select(Project.name).where(Project.exists == True, Project.hidden == False)  # noqa: E712
+            ).all())
+            args = _build_args(exe, task, resume, budget, project_names)
 
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         try:
@@ -425,6 +479,7 @@ def _watch(run_id: int, proc: subprocess.Popen, prompt: str, budget: float, minu
         status, error = "succeeded", None
     if error:
         writer.add("error", {"text": error, "stop_reason": stop_reason})
+    final_text = str((result or {}).get("result") or "")
     _finish(
         run_id,
         status=status,
@@ -432,7 +487,8 @@ def _watch(run_id: int, proc: subprocess.Popen, prompt: str, budget: float, minu
         stop_reason=stop_reason,
         exit_code=code,
         session_id=state.get("session_id"),
-        commit_message=extract_commit_message(str((result or {}).get("result") or "")),
+        commit_message=extract_commit_message(final_text),
+        proposals=extract_task_proposals(final_text),
     )
 
     # 이번 실행의 세션 기록도 색인하도록 스캔을 한 번 돌린다.
@@ -450,7 +506,7 @@ def _safe_scan(run_scan) -> None:
 
 def _finish(run_id: int, *, status: str, error: str | None, exit_code: int | None = None,
             session_id: str | None = None, commit_message: str | None = None,
-            stop_reason: str | None = None) -> None:
+            stop_reason: str | None = None, proposals: list[dict[str, Any]] | None = None) -> None:
     with Session(engine) as db:
         run = db.get(Run, run_id)
         run.status = status
@@ -464,6 +520,10 @@ def _finish(run_id: int, *, status: str, error: str | None, exit_code: int | Non
         task.status = "review" if status == "succeeded" else "failed"
         if commit_message:
             task.commit_message = commit_message
+        if proposals:
+            # 이미 등록한 제안은 남기고, 새 제안을 뒤에 붙인다.
+            kept = [p for p in (task.proposals or []) if p.get("task_id")]
+            task.proposals = kept + proposals
         if run.session_id:
             task.session_id = run.session_id
         task.updated_at = _now()

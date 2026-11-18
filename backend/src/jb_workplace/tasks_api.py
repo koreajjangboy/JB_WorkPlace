@@ -75,6 +75,7 @@ class TaskOut(BaseModel):
     committed_at: datetime | None
     max_budget_usd: float | None  # 비어 있으면 기본값
     max_minutes: int | None
+    source_task_id: int | None  # 이 작업을 제안한 작업
 
 
 class TaskDetail(TaskOut):
@@ -95,6 +96,27 @@ class TaskCreate(LimitsIn):
     prompt: str = Field(min_length=1, max_length=20000)
     title: str | None = Field(default=None, max_length=200)
     run_now: bool = False
+
+
+class ProposalOut(BaseModel):
+    index: int
+    project: str  # Claude가 적은 프로젝트 이름
+    project_id: int | None  # 이름이 정확히 하나의 프로젝트와 맞으면 채운다
+    title: str
+    prompt: str
+    task_id: int | None  # 등록한 작업 (없으면 아직 등록 안 함)
+    task_status: str | None
+
+
+class ProposalPick(BaseModel):
+    index: int
+    project_id: int
+    title: str | None = Field(default=None, max_length=200)
+    prompt: str = Field(min_length=1, max_length=20000)
+
+
+class ProposalsRegister(BaseModel):
+    items: list[ProposalPick] = Field(min_length=1, max_length=50)
 
 
 class RunCreate(BaseModel):
@@ -265,6 +287,81 @@ def delete_task(task_id: int, db: Session = Depends(get_session)) -> None:
         for r in db.exec(select(Run).where(Run.id.in_(run_ids))).all():
             db.delete(r)
     db.delete(task)
+    db.commit()
+
+
+def _proposal_outs(db: Session, task: Task) -> list[ProposalOut]:
+    proposals = task.proposals or []
+    if not proposals:
+        return []
+    by_name: dict[str, list[int]] = {}
+    for p in db.exec(select(Project).where(Project.exists == True, Project.hidden == False)).all():  # noqa: E712
+        by_name.setdefault(p.name.lower(), []).append(p.id)
+    task_ids = [p["task_id"] for p in proposals if p.get("task_id")]
+    statuses = {t.id: t.status for t in db.exec(select(Task).where(Task.id.in_(task_ids))).all()} if task_ids else {}
+    out = []
+    for i, p in enumerate(proposals):
+        matches = by_name.get(str(p.get("project") or "").lower(), [])
+        tid = p.get("task_id")
+        out.append(ProposalOut(
+            index=i,
+            project=p.get("project") or "",
+            project_id=matches[0] if len(matches) == 1 else None,
+            title=p.get("title") or "",
+            prompt=p.get("prompt") or "",
+            task_id=tid if tid in statuses else None,
+            task_status=statuses.get(tid),
+        ))
+    return out
+
+
+@router.get("/tasks/{task_id}/proposals", response_model=list[ProposalOut])
+def get_proposals(task_id: int, db: Session = Depends(get_session)) -> list[ProposalOut]:
+    return _proposal_outs(db, _get_task(db, task_id))
+
+
+@router.post("/tasks/{task_id}/proposals", response_model=list[ProposalOut])
+def register_proposals(task_id: int, body: ProposalsRegister, db: Session = Depends(get_session)) -> list[ProposalOut]:
+    """사람이 고르고 고친 제안을 할 일(todo)로 등록한다. 바로 실행하지는 않는다."""
+    task = _get_task(db, task_id)
+    proposals = [dict(p) for p in (task.proposals or [])]
+    current = {p.index: p for p in _proposal_outs(db, task)}
+    now = datetime.now(UTC)
+    for item in body.items:
+        if item.index not in current:
+            raise HTTPException(404, f"제안 #{item.index + 1}을 찾을 수 없습니다")
+        if current[item.index].task_id:
+            raise HTTPException(409, f"제안 #{item.index + 1}은 이미 등록했습니다")
+        project = db.get(Project, item.project_id)
+        if project is None or not project.exists:
+            raise HTTPException(404, f"제안 #{item.index + 1}의 프로젝트를 찾을 수 없습니다")
+        prompt = item.prompt.strip()
+        new = Task(
+            project_id=project.id,
+            title=(item.title or "").strip() or make_title(prompt),
+            prompt=prompt,
+            status="todo",
+            source_task_id=task.id,
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(new)
+        db.flush()
+        proposals[item.index] = {**proposals[item.index], "task_id": new.id}
+    task.proposals = proposals  # 새 리스트를 넣어야 JSONB 변경이 저장된다
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    return _proposal_outs(db, task)
+
+
+@router.delete("/tasks/{task_id}/proposals", status_code=204)
+def dismiss_proposals(task_id: int, db: Session = Depends(get_session)) -> None:
+    """아직 등록하지 않은 제안을 지운다 (등록한 것은 기록으로 남긴다)."""
+    task = _get_task(db, task_id)
+    kept = [p for p in _proposal_outs(db, task) if p.task_id]
+    task.proposals = [p for i, p in enumerate(task.proposals or []) if i in {k.index for k in kept}] or None
+    db.add(task)
     db.commit()
 
 

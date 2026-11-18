@@ -76,6 +76,10 @@ class Task(SQLModel, table=True):
     # 이 작업의 실행 한도. 비어 있으면 .env 의 기본값(RUNNER_MAX_BUDGET_USD / RUNNER_MAX_MINUTES)
     max_budget_usd: float | None = None
     max_minutes: int | None = None
+    # Claude가 마지막 메시지의 ```workplace-tasks 블록으로 제안한 작업
+    # [{"project", "title", "prompt", "task_id"}] — task_id는 사람이 등록한 뒤 채워진다.
+    proposals: list[dict[str, Any]] | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    source_task_id: int | None = Field(default=None, index=True)  # 이 작업을 제안한 작업 (지워져도 남는다)
 
 
 class Run(SQLModel, table=True):

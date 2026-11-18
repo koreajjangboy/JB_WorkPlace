@@ -170,7 +170,21 @@ export type Task = {
   committed_at: string | null;
   max_budget_usd: number | null;
   max_minutes: number | null;
+  source_task_id: number | null;
 };
+
+/** Claude가 마지막 메시지의 ```workplace-tasks 블록으로 제안한 작업 */
+export type Proposal = {
+  index: number;
+  project: string;
+  project_id: number | null;
+  title: string;
+  prompt: string;
+  task_id: number | null;
+  task_status: TaskStatus | null;
+};
+
+export type ProposalPick = { index: number; project_id: number; title: string; prompt: string };
 
 export type TaskDetail = Task & {
   project_path: string | null;
@@ -228,6 +242,13 @@ export const taskApi = {
   stop: (runId: number) => request<{ ok: boolean }>(`/api/runs/${runId}/stop`, { method: "POST" }),
   events: (runId: number) => request<RunEvent[]>(`/api/runs/${runId}/events`),
   streamUrl: (runId: number, after = -1) => `/api/runs/${runId}/stream?after=${after}`,
+  proposals: (id: number) => request<Proposal[]>(`/api/tasks/${id}/proposals`),
+  registerProposals: (id: number, items: ProposalPick[]) =>
+    request<Proposal[]>(`/api/tasks/${id}/proposals`, json({ items })),
+  dismissProposals: async (id: number) => {
+    const res = await fetch(`/api/tasks/${id}/proposals`, { method: "DELETE" });
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.detail ?? res.statusText);
+  },
 };
 
 // ---------------------------------------------------------------- 검토: 변경 파일, diff, 커밋

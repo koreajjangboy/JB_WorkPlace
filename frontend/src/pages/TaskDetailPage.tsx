@@ -5,6 +5,7 @@ import { LimitPicker, describeLimits } from "../limits";
 import { Badge, Button, Card, ErrorBox, Loading, StatusBadge } from "../components";
 import { dateTime, duration, tokens, usd } from "../format";
 import { useAsync } from "../useAsync";
+import ProposalsCard from "./ProposalsCard";
 import ReviewCard from "./ReviewCard";
 
 function clock(iso: string) {
@@ -312,6 +313,15 @@ export default function TaskDetailPage() {
           </Link>{" "}
           · {task.project_path} · 실행 {task.run_count}회
           {task.total_cost_usd != null && <> · 합계 {usd(task.total_cost_usd)}</>}
+          {task.source_task_id != null && (
+            <>
+              {" "}
+              ·{" "}
+              <Link to={`/tasks/${task.source_task_id}`} className="hover:underline">
+                작업 #{task.source_task_id}이 제안함
+              </Link>
+            </>
+          )}
         </div>
         {runner.data && (
           <div className="mt-1 text-xs text-zinc-600 dark:text-zinc-400">
@@ -379,6 +389,8 @@ export default function TaskDetailPage() {
           </div>
         </div>
       )}
+
+      {!neverRun && !running && <ProposalsCard taskId={task.id} refreshKey={task.updated_at} />}
 
       {!neverRun && !running && <ReviewCard task={task} onChanged={reload} />}
 
