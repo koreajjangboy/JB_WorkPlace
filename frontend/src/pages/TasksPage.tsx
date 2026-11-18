@@ -118,7 +118,13 @@ export default function TasksPage() {
       ) : tasks.loading && !tasks.data ? (
         <Loading />
       ) : view === "board" ? (
-        <TaskBoard tasks={tasks.data ?? []} />
+        <TaskBoard
+          tasks={tasks.data ?? []}
+          onChanged={() => {
+            tasks.reload();
+            counts.reload();
+          }}
+        />
       ) : (
         <Card>
           {tasks.data && tasks.data.length > 0 ? (
