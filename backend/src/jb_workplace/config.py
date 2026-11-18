@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     def calendar_ics_urls(self) -> list[str]:
         return [u.strip() for u in self.google_calendar_ics_urls.split(",") if u.strip()]
 
+    # ---- 책나래 대출 현황 ----
+    # 로그인 창으로 쓸 브라우저 exe. 비워 두면 Edge, Chrome 순으로 찾는다.
+    booknarae_browser: str = ""
+    # 로그인 쿠키, 마지막 대출 목록, 로그인 창 전용 브라우저 프로필을 두는 폴더 (저장소 밖)
+    booknarae_data_dir: Path = Path.home() / ".jb_workplace" / "booknarae"
+    # 사이트에서 목록을 다시 받기 전까지 쓰는 시간(분)
+    booknarae_cache_minutes: int = 30
+
     # ---- Gemini 앱 사용량 (Google Takeout) ----
     # 이 폴더들에 생기는 takeout-*.zip 을 자동으로 가져온다. 쉼표로 여러 개 지정.
     # Takeout을 Google Drive로 받고 Drive 데스크톱 앱으로 동기화하면 'G:\내 드라이브\Takeout' 에 생긴다.

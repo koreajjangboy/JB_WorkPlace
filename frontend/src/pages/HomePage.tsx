@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router";
 import { api, taskApi } from "../api";
+import BooknaraeSection from "../BooknaraeSection";
 import CalendarSection from "../CalendarSection";
 import { Card, Empty, ErrorBox, Loading, SessionRow, Stat } from "../components";
 import { relativeTime } from "../format";
@@ -74,6 +75,8 @@ export default function HomePage() {
       </div>
 
       <CalendarSection />
+
+      <BooknaraeSection />
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <Card

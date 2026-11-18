@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import router
+from .booknarae_api import router as booknarae_router
 from .calendar_api import router as calendar_router
 from .config import get_settings
 from .runner import recover_orphans
@@ -59,3 +60,4 @@ app.include_router(tasks_router)
 app.include_router(project_changes_router)
 app.include_router(usage_router)
 app.include_router(calendar_router)
+app.include_router(booknarae_router)
